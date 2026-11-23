@@ -83,7 +83,7 @@ function Lobby({ session, onOpen }: { session: Session; onOpen: (i: number) => v
         <ol className="steps">
           <li><b>Trade</b><span>Buy and sell instantly. No wallet popups, no fees.</span></li>
           <li><b>Watch</b><span>Every trade is public. Who moved just before the news?</span></li>
-          <li><b>Accuse</b><span>Cast a sealed vote. Catch the insider and take their profit.</span></li>
+          <li><b>Accuse</b><span>Cast a sealed vote. Right: +100 chips and a share of their profit. Wrong: −50.</span></li>
         </ol>
       </section>
       <section className="tables">
@@ -328,7 +328,7 @@ function TableView({ session, index, onLeave, onLatency }: { session: Session; i
           {settled && (
             <div className={`result ${t.caught ? "caught" : "escaped"}`}>
               <b>{SEAT_NAMES[t.insider]} was the insider {t.caught ? "and got caught." : "and got away with it."}</b>
-              <span>{t.caught ? "Their profit went to the players who accused them." : "Their profit doubled."} {mySeat >= 0 ? `Next round in ${nextIn}s.` : ""}</span>
+              <span>{t.caught ? "They are fined 100 chips and their profit is split between the players who accused them." : "Their profit doubled."} {mySeat >= 0 ? `Next round in ${nextIn}s.` : ""}</span>
             </div>
           )}
         </section>

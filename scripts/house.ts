@@ -43,6 +43,7 @@ for (let n = 0; n < count; n++) {
   tables.push({ id: FIRST_TABLE + n, key, bots, round: -1, firstHuman: 0, checkpointed: -1, busy: false, idle: new Map() });
 }
 await connect();
+const LIVE_TABLES = Number(process.env.LIVE_TABLES ?? 1);
 console.log(`house ${admin.publicKey.toBase58()} running ${count} tables`);
 
 const botAt = (t: T, player: PublicKey) => t.bots.find((b) => b.kp.publicKey.equals(player));
@@ -95,7 +96,7 @@ async function playBot(t: T, b: Bot, s: any, elapsed: number) {
     if (b.plan) {
       // Insider: position ahead of the next shock, sometimes late or small, to hide.
       const next = b.plan.find((x: any) => x.at > elapsed);
-      if (next && next.at - elapsed < rnd(4, 12)) d = Math.sign(next.bps) * rnd(1, 4) - seat.pos * 0.5;
+      if (next && next.at - elapsed < rnd(4, 12) && Math.random() < 0.75) d = Math.sign(next.bps) * rnd(1, 3) - seat.pos * 0.4;
       else if (Math.random() < 0.3) d = rnd(-1.4, 1.4);
     } else {
       const last = [...s.shocks].filter((x: any) => x.bps && x.at <= elapsed).pop();
@@ -159,7 +160,10 @@ async function step(t: T) {
     return;
   }
   const since = s.phase === 3 ? now() - s.settledAt.toNumber() : 1e9;
-  if (!humans.length) {
+  // The first tables always run, so there is a live game to watch and steady on-chain activity.
+  const live = t.id - FIRST_TABLE < LIVE_TABLES;
+  if (!humans.length && live && !t.firstHuman) t.firstHuman = now() - LOBBY_WAIT;
+  if (!humans.length && !live) {
     t.firstHuman = 0;
     // An empty table keeps no bots, so every seat is open.
     for (const b of t.bots) if (b.seat >= 0) await stand(t, b.kp, b.conn, b.seat);
