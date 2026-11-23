@@ -33,6 +33,10 @@ use state::*;
 
 declare_id!("BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M");
 
+/// The VRF program's signer for callbacks into this program. Kept in a `const` so the PDA is
+/// derived at compile time: deriving it inside the callback costs over a million compute units.
+const VRF_CALLBACK_IDENTITY: Pubkey =
+    Pubkey::new_from_array(vrf_sdk::consts::scoped_vrf_identity_const(&crate::ID).0);
 const PROGRAM_IDENTITY: Pubkey = program_identity_pubkey(&crate::ID);
 
 pub const TABLE_SEED: &[u8] = b"table";
@@ -216,7 +220,10 @@ pub mod tipoff {
     }
 
     /// Requests randomness for the next round. Anyone may call once every seat is filled.
-    pub fn start_round(ctx: Context<StartRound>, client_seed: [u8; 32]) -> Result<()> {
+    pub fn start_round<'info>(
+        ctx: Context<'info, StartRound<'info>>,
+        client_seed: [u8; 32],
+    ) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let t = &mut ctx.accounts.table;
         let retry = t.phase == Phase::Pending as u8 && now - t.requested_at > VRF_RETRY_SECS;
@@ -243,8 +250,10 @@ pub mod tipoff {
             meta(ctx.accounts.secret.key(), true),
             meta(ctx.accounts.price_feed.key(), false),
         ];
-        for i in 0..SEATS {
-            metas.push(meta(seat_pda(&table_key, i as u8), true));
+        require!(ctx.remaining_accounts.len() == SEATS, TipoffError::BadSeat);
+        for (i, ai) in ctx.remaining_accounts.iter().enumerate() {
+            load_seat(ai, &table_key, i)?;
+            metas.push(meta(ai.key(), true));
         }
         let ix = create_request_randomness_ix_const(
             RequestRandomnessParams {
@@ -287,20 +296,9 @@ pub mod tipoff {
         s.shocks = draw.shocks;
 
         require!(ctx.remaining_accounts.len() == SEATS, TipoffError::BadSeat);
+        let table_key = t.key();
         for (i, ai) in ctx.remaining_accounts.iter().enumerate() {
-            require_keys_eq!(ai.key(), seat_pda(&t.key(), i as u8), TipoffError::BadSeat);
-            let mut p: Account<SeatPrivate> = Account::try_from(ai)?;
-            p.round = t.round;
-            p.vote = NONE;
-            // Every seat is written every round, so the write pattern reveals nothing.
-            if i as u8 == draw.insider {
-                p.role = ROLE_INSIDER;
-                p.shocks = draw.shocks;
-            } else {
-                p.role = ROLE_TRADER;
-                p.shocks = [Shock::default(); SHOCKS];
-            }
-            p.exit(&crate::ID)?;
+            deal_seat(ai, &table_key, i, t.round, &draw)?;
         }
 
         t.phase = Phase::Live as u8;
@@ -373,9 +371,9 @@ pub mod tipoff {
 
         require!(ctx.remaining_accounts.len() == SEATS, TipoffError::BadSeat);
         let mut votes = [NONE; SEATS];
+        let table_key = t.key();
         for (i, ai) in ctx.remaining_accounts.iter().enumerate() {
-            require_keys_eq!(ai.key(), seat_pda(&t.key(), i as u8), TipoffError::BadSeat);
-            let p: Account<SeatPrivate> = Account::try_from(ai)?;
+            let p = load_seat(ai, &table_key, i)?;
             if p.round == t.round {
                 votes[i] = p.vote;
             }
@@ -461,8 +459,30 @@ fn member(pubkey: Pubkey) -> Member {
     Member { flags: TX_LOGS_FLAG | TX_MESSAGE_FLAG | TX_BALANCES_FLAG, pubkey }
 }
 
-pub fn seat_pda(table: &Pubkey, idx: u8) -> Pubkey {
-    Pubkey::find_program_address(&[SEAT_SEED, table.as_ref(), &[idx]], &crate::ID).0
+/// Loads seat `idx` of `table`. A program-owned `SeatPrivate` can only exist at its PDA, so
+/// matching its stored table and index identifies it without re-deriving the address.
+#[inline(never)]
+fn load_seat<'info>(ai: &'info AccountInfo<'info>, table: &Pubkey, idx: usize) -> Result<Box<Account<'info, SeatPrivate>>> {
+    let p: Box<Account<SeatPrivate>> = Box::new(Account::try_from(ai)?);
+    require!(p.table == *table && p.idx as usize == idx, TipoffError::BadSeat);
+    Ok(p)
+}
+
+/// Writes one seat's private view of the round. Every seat is written every round, so the
+/// write pattern reveals nothing.
+#[inline(never)]
+fn deal_seat<'info>(ai: &'info AccountInfo<'info>, table: &Pubkey, idx: usize, round: u64, draw: &Draw) -> Result<()> {
+    let mut p = load_seat(ai, table, idx)?;
+    p.round = round;
+    p.vote = NONE;
+    if idx as u8 == draw.insider {
+        p.role = ROLE_INSIDER;
+        p.shocks = draw.shocks;
+    } else {
+        p.role = ROLE_TRADER;
+        p.shocks = [Shock::default(); SHOCKS];
+    }
+    p.exit(&crate::ID)
 }
 
 /// Pre-funds a private account with the rent its rollup-side permission will need.
@@ -527,7 +547,7 @@ fn update_permission<'info>(
 }
 
 /// Applies every hidden shock whose time has come and re-reads the oracle.
-fn refresh(t: &mut Account<Table>, s: &Account<Secret>, feed: &AccountInfo, now: i64) -> Result<()> {
+fn refresh(t: &mut Table, s: &Account<Secret>, feed: &AccountInfo, now: i64) -> Result<()> {
     if t.phase != Phase::Live as u8 {
         return Ok(());
     }
@@ -560,7 +580,7 @@ fn refresh(t: &mut Account<Table>, s: &Account<Secret>, feed: &AccountInfo, now:
 #[instruction(id: u64)]
 pub struct InitTable<'info> {
     #[account(init, payer = authority, space = 8 + Table::INIT_SPACE, seeds = [TABLE_SEED, &id.to_le_bytes()], bump)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(init, payer = authority, space = 8 + Secret::INIT_SPACE, seeds = [SECRET_SEED, table.key().as_ref()], bump)]
     pub secret: Account<'info, Secret>,
     #[account(mut)]
@@ -572,7 +592,7 @@ pub struct InitTable<'info> {
 #[instruction(idx: u8)]
 pub struct InitSeat<'info> {
     #[account(has_one = authority)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(init, payer = authority, space = 8 + SeatPrivate::INIT_SPACE, seeds = [SEAT_SEED, table.key().as_ref(), &[idx]], bump)]
     pub seat: Account<'info, SeatPrivate>,
     #[account(mut)]
@@ -679,7 +699,7 @@ pub struct PermAccounts<'info> {
 pub struct SealSecret<'info> {
     pub authority: Signer<'info>,
     #[account(has_one = authority)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(mut, seeds = [SECRET_SEED, table.key().as_ref()], bump = secret.bump)]
     pub secret: Account<'info, Secret>,
     #[account(constraint = perm.permission.key() == permission_pda(&secret.key()) @ TipoffError::BadSecret)]
@@ -690,7 +710,7 @@ pub struct SealSecret<'info> {
 pub struct SealSeat<'info> {
     pub authority: Signer<'info>,
     #[account(has_one = authority)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(mut, seeds = [SEAT_SEED, table.key().as_ref(), &[seat.idx]], bump = seat.bump)]
     pub seat: Account<'info, SeatPrivate>,
     #[account(constraint = perm.permission.key() == permission_pda(&seat.key()) @ TipoffError::BadSeat)]
@@ -703,7 +723,7 @@ pub struct Sit<'info> {
     #[account(mut, seeds = [PLAYER_SEED, player.wallet.as_ref()], bump = player.bump)]
     pub player: Account<'info, Player>,
     #[account(mut)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(mut, seeds = [SEAT_SEED, table.key().as_ref(), &[seat.idx]], bump = seat.bump)]
     pub seat: Account<'info, SeatPrivate>,
     #[account(constraint = perm.permission.key() == permission_pda(&seat.key()) @ TipoffError::BadSeat)]
@@ -716,7 +736,7 @@ pub struct StartRound<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     #[account(mut)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(seeds = [SECRET_SEED, table.key().as_ref()], bump = secret.bump)]
     pub secret: Account<'info, Secret>,
     /// CHECK: checked against the canonical feed address
@@ -734,8 +754,10 @@ pub struct StartRound<'info> {
 #[vrf_callback]
 #[derive(Accounts)]
 pub struct OnRandom<'info> {
+    #[account(address = VRF_CALLBACK_IDENTITY)]
+    pub vrf_program_identity: Signer<'info>,
     #[account(mut)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(mut, seeds = [SECRET_SEED, table.key().as_ref()], bump = secret.bump)]
     pub secret: Account<'info, Secret>,
     /// CHECK: checked against the canonical feed address
@@ -746,7 +768,7 @@ pub struct OnRandom<'info> {
 #[derive(Accounts)]
 pub struct Tick<'info> {
     #[account(mut)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(seeds = [SECRET_SEED, table.key().as_ref()], bump = secret.bump)]
     pub secret: Account<'info, Secret>,
     /// CHECK: checked against the canonical feed address
@@ -758,7 +780,7 @@ pub struct Tick<'info> {
 pub struct Trade<'info> {
     pub signer: Signer<'info>,
     #[account(mut)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(seeds = [SECRET_SEED, table.key().as_ref()], bump = secret.bump)]
     pub secret: Account<'info, Secret>,
     /// CHECK: checked against the canonical feed address
@@ -769,7 +791,7 @@ pub struct Trade<'info> {
 #[derive(Accounts)]
 pub struct Vote<'info> {
     pub signer: Signer<'info>,
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(mut, seeds = [SEAT_SEED, table.key().as_ref(), &[seat.idx]], bump = seat.bump)]
     pub seat: Account<'info, SeatPrivate>,
 }
@@ -777,7 +799,7 @@ pub struct Vote<'info> {
 #[derive(Accounts)]
 pub struct Settle<'info> {
     #[account(mut)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     #[account(seeds = [SECRET_SEED, table.key().as_ref()], bump = secret.bump)]
     pub secret: Account<'info, Secret>,
 }
@@ -788,7 +810,7 @@ pub struct Checkpoint<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     #[account(mut, has_one = authority)]
-    pub table: Account<'info, Table>,
+    pub table: Box<Account<'info, Table>>,
     /// CHECK: must be the table authority, so strangers cannot spend the commit budget
     #[account(address = payer.key())]
     pub authority: UncheckedAccount<'info>,
