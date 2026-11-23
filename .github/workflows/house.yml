@@ -1,0 +1,24 @@
+# Keeps the public tables alive: seats bots, requests the VRF draw, ticks, settles and
+# checkpoints. Each run lasts just under the 6-hour job limit and the schedule starts the next.
+name: House runner
+on:
+  schedule:
+    - cron: "5 */5 * * *"
+  workflow_dispatch:
+concurrency:
+  group: house
+  cancel-in-progress: true
+jobs:
+  house:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run house
+        env:
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
