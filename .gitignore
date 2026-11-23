@@ -1,0 +1,7 @@
+target/
+node_modules/
+.anchor/
+*.log
+.env*
+keys/
+test-ledger/
