@@ -17,7 +17,7 @@ Built for Solana Blitz v10 on MagicBlock's Private Ephemeral Rollup.
 Tipoff cannot run on plain Solana, for two separate reasons:
 
 1. **The game is a secret.** The insider's identity, the shock schedule and every vote must be hidden from all players, from the table operator and from anyone reading the chain, while the program still enforces the rules on them. On Solana every account is public. In the Private Ephemeral Rollup the accounts live inside a TEE and each one has an access list.
-2. **The game is fast.** A round is 60 seconds of trading against a moving price. Trades confirm in about 350 to 500 ms with no fee and no wallet popup, measured from the browser and from `scripts/round.ts` (median 520 ms across 12 trades and 6 votes in one run).
+2. **The game is fast.** A round is 60 seconds of trading against a moving price. Trades confirm in about 350 to 500 ms with no fee and no wallet popup, measured from the browser and from `scripts/round.ts` (median 520 ms in one scripted run).
 
 Remove any one of the pieces below and the game stops working:
 
