@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "round": "tsx scripts/round.ts"
+    "round": "tsx scripts/round.ts",
+    "provision": "tsx scripts/provision.ts",
+    "house": "tsx scripts/house.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.32.1",

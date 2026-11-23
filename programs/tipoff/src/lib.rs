@@ -172,45 +172,52 @@ pub mod tipoff {
     }
 
     /// Takes an empty seat. Only this player's wallet and session key may read the seat's
-    /// private account from now on.
+    /// private account from now on. Without a profile the signer plays as a guest: its key is
+    /// both wallet and session key, and nothing has to exist on Solana first.
     pub fn sit(ctx: Context<Sit>, entropy: [u8; 32]) -> Result<()> {
         let t = &mut ctx.accounts.table;
-        let player = &ctx.accounts.player;
-        require!(player.signed_by(&ctx.accounts.signer.key()), TipoffError::Unauthorized);
+        let signer = ctx.accounts.signer.key();
+        let (wallet, session) = match &ctx.accounts.player {
+            Some(player) => {
+                require!(player.signed_by(&signer), TipoffError::Unauthorized);
+                (player.wallet, player.session)
+            }
+            None => (signer, signer),
+        };
         require!(t.phase != Phase::Live as u8 && t.phase != Phase::Pending as u8, TipoffError::WrongPhase);
         let idx = ctx.accounts.seat.idx as usize;
         require!(t.seats[idx].player == Pubkey::default(), TipoffError::SeatTaken);
-        require!(
-            !t.seats.iter().any(|s| s.player == player.wallet),
-            TipoffError::AlreadySeated
-        );
-        t.seats[idx] = Seat { player: player.wallet, session: player.session, ..Seat::default() };
+        require!(!t.seats.iter().any(|s| s.player == wallet), TipoffError::AlreadySeated);
+        t.seats[idx] = Seat { player: wallet, session, ..Seat::default() };
         t.entropy = hashv(&[&t.entropy[..], &entropy[..]]).to_bytes();
 
         let p = &mut ctx.accounts.seat;
         p.reset();
         let table = t.key();
         let seeds: &[&[u8]] = &[SEAT_SEED, table.as_ref(), &[p.idx], &[p.bump]];
-        update_permission(
-            &p.to_account_info(),
-            &ctx.accounts.perm,
-            seeds,
-            vec![member(player.wallet), member(player.session)],
-        )
+        let mut members = vec![member(wallet)];
+        if session != wallet {
+            members.push(member(session));
+        }
+        update_permission(&p.to_account_info(), &ctx.accounts.perm, seeds, members)
     }
 
-    /// Leaves a seat between rounds and banks the seat's score into the player's profile.
+    /// Leaves a seat between rounds. With a profile, the seat's score is banked into it.
     pub fn stand(ctx: Context<Sit>) -> Result<()> {
         let t = &mut ctx.accounts.table;
-        let player = &mut ctx.accounts.player;
         let idx = ctx.accounts.seat.idx as usize;
-        let by_player = player.signed_by(&ctx.accounts.signer.key());
+        let signer = ctx.accounts.signer.key();
         // The table authority may clear a seat so an idle player cannot block the table.
-        require!(by_player || ctx.accounts.signer.key() == t.authority, TipoffError::Unauthorized);
+        require!(
+            t.seats[idx].signed_by(&signer) || signer == t.authority,
+            TipoffError::Unauthorized
+        );
         require!(t.phase != Phase::Live as u8 && t.phase != Phase::Pending as u8, TipoffError::WrongPhase);
-        require!(t.seats[idx].player == player.wallet, TipoffError::BadSeat);
-        player.score = player.score.saturating_add(t.seats[idx].score);
-        player.rounds = player.rounds.saturating_add(t.seats[idx].rounds);
+        if let Some(player) = &mut ctx.accounts.player {
+            require!(t.seats[idx].player == player.wallet, TipoffError::BadSeat);
+            player.score = player.score.saturating_add(t.seats[idx].score);
+            player.rounds = player.rounds.saturating_add(t.seats[idx].rounds);
+        }
         t.seats[idx] = Seat::default();
         let p = &mut ctx.accounts.seat;
         p.reset();
@@ -721,7 +728,7 @@ pub struct SealSeat<'info> {
 pub struct Sit<'info> {
     pub signer: Signer<'info>,
     #[account(mut, seeds = [PLAYER_SEED, player.wallet.as_ref()], bump = player.bump)]
-    pub player: Account<'info, Player>,
+    pub player: Option<Account<'info, Player>>,
     #[account(mut)]
     pub table: Box<Account<'info, Table>>,
     #[account(mut, seeds = [SEAT_SEED, table.key().as_ref(), &[seat.idx]], bump = seat.bump)]

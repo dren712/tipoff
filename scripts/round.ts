@@ -17,7 +17,7 @@ const FEED = new PublicKey("ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu");
 const QUEUE = new PublicKey("5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc");
 const SEATS = 6;
 
-const idl = JSON.parse(fs.readFileSync("target/idl/tipoff.json", "utf8"));
+const idl = JSON.parse(fs.readFileSync("app/src/idl/tipoff.json", "utf8"));
 const load = (p: string) => Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(p, "utf8"))));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const admin = load(process.env.WALLET ?? "keys/deployer.json");
