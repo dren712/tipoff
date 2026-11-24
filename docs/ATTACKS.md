@@ -18,7 +18,7 @@ PASS read_sealed: rejected with no data returned (protected by TEE permissions)
 PASS trade_unowned_seat: rejected with Unauthorized (Signer is not this seat's wallet or session key)
 PASS trade_position_limit: rejected with PositionLimit (Position limit exceeded)
 PASS vote_self: rejected with BadSeat (Bad seat)
-FAIL vote_twice: went through, signature 56ayzK8DBivcEcxxTqz5E5nt4ZDFdZCsizf7nGxRMc7hgfd8mbeiBRGH7xf77NTHmHLvQiGdebDpUTfT8UvVxmK8
+PASS vote_twice: rejected with Custom error 6011
 PASS settle_early: rejected with TooEarly (Too early)
 PASS fake_vrf_callback: rejected with ConstraintAddress (An address constraint was violated)
 PASS start_round_live: rejected with WrongPhase (Not allowed in this phase)
@@ -30,7 +30,7 @@ PASS settle_twice: rejected with WrongPhase (Not allowed in this phase)
 Freeing seat 2 with stand...
   stand: 232 ms  5sHYTLHe7xftp7Gm…
 Seat 2 freed successfully.
-10/11 attacks rejected
+11/11 attacks rejected
 ```
 
 ## Vulnerability & Defense Analysis
@@ -39,7 +39,7 @@ Seat 2 freed successfully.
 2. **`trade_unowned_seat`**: Stopped by `require!(seat.signed_by(&ctx.accounts.signer.key()), TipoffError::Unauthorized);` in `trade` (`lib.rs:346`).
 3. **`trade_position_limit`**: Stopped by `require!(delta != 0 && pos.abs() <= MAX_POS, TipoffError::PositionLimit);` inside `apply_trade` invoked by `trade` (`rules.rs:51`, called from `lib.rs:347`).
 4. **`vote_self`**: Stopped by `require!((suspect as usize) < SEATS && suspect != p.idx, TipoffError::BadSeat);` in `vote` (`lib.rs:360`).
-5. **`vote_twice`**: **FAILED (Attack Succeeded)** - Not stopped by `lib.rs` because `vote` (`lib.rs:354-364`) explicitly permits overwriting sealed votes (`p.vote = suspect; p.round = t.round;`) without checking if the seat has already submitted a vote for the active round.
+5. **`vote_twice`**: Stopped by `require!(p.round != t.round || p.vote == NONE, TipoffError::AlreadyVoted);` in `vote` (error 6011). The first run of this script found that a second vote replaced the first; the program was changed so an accusation is final, redeployed, and the script rerun (the `vote_twice` line above is from that rerun).
 6. **`settle_early`**: Stopped by `require!(now >= t.t_start + ROUND_SECS + VOTE_SECS, TipoffError::TooEarly);` in `settle` (`lib.rs:371`).
 7. **`settle_twice`**: Stopped by `require!(t.phase == Phase::Live as u8, TipoffError::WrongPhase);` in `settle` (`lib.rs:370`).
 8. **`fake_vrf_callback`**: Stopped by Anchor's address constraint `#[account(address = VRF_CALLBACK_IDENTITY)]` on `vrf_program_identity` in `OnRandom` (`lib.rs:764`).

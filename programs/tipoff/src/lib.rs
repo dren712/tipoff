@@ -358,6 +358,8 @@ pub mod tipoff {
         require!(t.phase == Phase::Live as u8 && now < t.t_start + ROUND_SECS + VOTE_SECS, TipoffError::WrongPhase);
         require!(t.seats[p.idx as usize].signed_by(&ctx.accounts.signer.key()), TipoffError::Unauthorized);
         require!((suspect as usize) < SEATS && suspect != p.idx, TipoffError::BadSeat);
+        // One accusation per round, and it is final.
+        require!(p.round != t.round || p.vote == NONE, TipoffError::AlreadyVoted);
         p.vote = suspect;
         p.round = t.round;
         Ok(())
@@ -863,4 +865,6 @@ pub enum TipoffError {
     BadPrice,
     #[msg("Math overflow")]
     Overflow,
+    #[msg("This seat has already voted this round")]
+    AlreadyVoted,
 }

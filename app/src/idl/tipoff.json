@@ -2053,6 +2053,11 @@
       "code": 6010,
       "name": "Overflow",
       "msg": "Math overflow"
+    },
+    {
+      "code": 6011,
+      "name": "AlreadyVoted",
+      "msg": "This seat has already voted this round"
     }
   ],
   "types": [
