@@ -3,9 +3,10 @@ import {
   FIRST_TABLE, MAX_POS, NONE, ROUND_SECS, SEATS, Session, Table, SeatPrivate, VOTE_SECS, ZERO, actions, base, equity, explorer,
   fetchSeat, fetchTable, ledgerPda, redraw, secretPda, seatPda, short, tablePda,
 } from "./chain";
-import { Chart, Point, Mark } from "./Chart";
+import type { Point, Mark } from "./Chart";
 import { Avatar, SEAT_COLORS, SEAT_NAMES } from "./Avatar";
 import { isMuted, setMuted, sfx } from "./sound";
+import { Scene3D, Stage } from "./Scene3D";
 
 const chips = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(0)}`;
 const pct = (bps: number) => `${bps > 0 ? "+" : "−"}${(Math.abs(bps) / 100).toFixed(1)}%`;
@@ -32,6 +33,16 @@ export function TableView({ session, index, onLeave, onLatency }: { session: Ses
   const shownRole = useRef("");
   const me = session.kp.publicKey;
   const mySeatRef = useRef(-1);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const tagRefs = useRef<(HTMLElement | null)[]>([]);
+  const scene = useRef<Scene3D | null>(null);
+  const pick = useRef<(i: number) => void>(() => {});
+  const loaded = !!t;
+  useEffect(() => {
+    if (!loaded || !hostRef.current) return;
+    const s = (scene.current = new Scene3D(hostRef.current, SEAT_COLORS, () => tagRefs.current, (i) => pick.current(i)));
+    return () => { s.dispose(); scene.current = null; };
+  }, [loaded]);
 
   useEffect(() => {
     let live = true;
@@ -51,13 +62,14 @@ export function TableView({ session, index, onLeave, onLatency }: { session: Ses
           const p = next.tape[k % next.tape.length];
           h.marks.push({ t: p.t, p: p.price.toNumber(), seat: p.seat, delta: p.delta });
           fresh[p.seat] = { id: k, delta: p.delta };
+          if (!first) scene.current?.trade(p.seat, p.delta);
           if (!first && p.seat !== mySeatRef.current) sfx.tick(p.delta > 0);
         }
         if (Object.keys(fresh).length && !first) setPops((o) => ({ ...o, ...fresh }));
         h.seen = next.tapeLen;
         if (next.shocksSeen > h.shocks) {
           const bps = next.shocks[next.shocksSeen - 1].bps;
-          if (!first) { setFlash({ id: Date.now(), bps }); sfx.news(bps > 0); }
+          if (!first) { setFlash({ id: Date.now(), bps }); sfx.news(bps > 0); scene.current?.news(bps); }
           h.shocks = next.shocksSeen;
         }
         if (h.phase === 1) sfx.bell();
@@ -143,6 +155,24 @@ export function TableView({ session, index, onLeave, onLatency }: { session: Ses
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // Push the round into the 3D floor.
+  useEffect(() => {
+    if (!t || !scene.current) return;
+    const seatedNow = t.seats.some((s) => !s.player.equals(ZERO)), done = phase === 3 && seatedNow;
+    const st: Stage = phase === 1 ? "deal" : trading ? "live" : accusing ? "vote" : done ? (stage === 0 ? "drum" : "reveal") : "idle";
+    scene.current.set({
+      stage: st, me: mySeat, insiderMe: !!insider, insider: t.insider, caught: t.caught,
+      seats: t.seats.map((s) => ({ empty: s.player.equals(ZERO), pos: s.pos, mood: phase === 2 ? Math.sign(Math.round(equity(s, price, openPrice))) : 0 })),
+      wall: {
+        price, open: phase >= 2 ? openPrice : 0, elapsed, round: Number(round), points: hist.current.points, marks: hist.current.marks,
+        shocks: t.shocks.filter((s) => s.bps !== 0 && phase >= 2), future: insider ? current!.shocks.filter((s) => s.at > elapsed) : [],
+        title: st === "idle" ? "TAKE A SEAT" : st === "deal" ? "DEALING SECRET ROLES" : "",
+        sub: st === "idle" ? "Bots fill the empty desks. One of the six will be the insider." : st === "deal" ? "MagicBlock VRF is picking the insider inside the private rollup" : "",
+      },
+    });
+  });
+  pick.current = (i) => { if (mySeat >= 0 && canVote && !busy) { sfx.vote(); run(`Accused ${SEAT_NAMES[i]}`, () => actions.vote(session, key, mySeat, i)); } };
+
   if (!t) return <div className="center muted">Loading table…</div>;
 
   const seated = t.seats.some((s) => !s.player.equals(ZERO));
@@ -193,35 +223,6 @@ export function TableView({ session, index, onLeave, onLatency }: { session: Ses
     },
   };
 
-  const seatEl = (i: number) => {
-    const s = t.seats[i];
-    const empty = s.player.equals(ZERO);
-    const eq = phase === 2 ? equity(s, price, openPrice) : 0;
-    const pop = pops[i];
-    const unmasked = settled && stage >= 1 && t.insider === i;
-    const last = s.last.toNumber() / 1e6;
-    return (
-      <div key={i} className={`trader ${i === mySeat ? "me" : ""} ${unmasked ? "unmasked" : ""} ${settled && stage === 0 ? "suspense" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[i] }}>
-        {pop && phase === 2 && <span key={pop.id} className={`pop ${pop.delta > 0 ? "up" : "down"}`}>{pop.delta > 0 ? "▲ BUY" : "▼ SELL"} {Math.abs(pop.delta)}</span>}
-        {votesFor(i) > 0 && <span className="votes" title="Accusations received">{votesFor(i)} {votesFor(i) === 1 ? "vote" : "votes"}</span>}
-        <div className="face"><Avatar seat={i} empty={empty} masked={unmasked || (i === mySeat && insider)} mood={phase === 2 ? Math.sign(Math.round(eq)) : settled && stage === 2 ? Math.sign(last) : 0} /></div>
-        <div className="plate">
-          <b>{empty ? "Empty" : SEAT_NAMES[i]}{i === mySeat && <em> you</em>}</b>
-          {empty ? (canSit ? <button className="sit" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, i))}>Sit here</button> : <span className="muted small">open seat</span>)
-            : phase === 2 ? (
-              <span className="posrow">
-                <span className="lots sm">{Array.from({ length: MAX_POS * 2 + 1 }, (_, k) => k - MAX_POS).map((v) => (
-                  <i key={v} className={v === 0 ? "mid" : (v > 0 && s.pos >= v) || (v < 0 && s.pos <= v) ? (v > 0 ? "long" : "shortp") : ""} />))}</span>
-                <span className={eq >= 0 ? "up" : "down"}>{chips(eq)}</span>
-              </span>
-            ) : settled && stage === 2 ? <span className={last >= 0 ? "up big" : "down big"}>{chips(last)}</span>
-            : <span className="muted small">{chips(s.score.toNumber() / 1e6)} total</span>}
-        </div>
-        {i === mySeat && !trading && !canVote && phase !== 1 && <button className="leave" disabled={busy} onClick={() => run("Left the table", () => actions.stand(session, key, i))}>Leave</button>}
-      </div>
-    );
-  };
-
   return (
     <main className={`game ${insider ? "asinsider" : ""}`}>
       <div className="topline">
@@ -233,59 +234,54 @@ export function TableView({ session, index, onLeave, onLatency }: { session: Ses
       </div>
 
       <div className="scene">
-        <div className="pit">
-          <div className="rowseats">{[0, 1, 2].map(seatEl)}</div>
-          <div className={`board ${flash ? (flash.bps > 0 ? "shakeup" : "shakedown") : ""}`}>
-            <div className="pricebar">
-              <span className="price">{price ? `$${usd(price)}` : "—"}</span>
-              {openPrice > 0 && phase >= 2 && <span className={price >= openPrice ? "up" : "down"}>{pct(((price - openPrice) / openPrice) * 10000)}</span>}
-              <span className="muted small">SOL/USD live</span>
-              <span className="grow" />
-              {trading && <span className={`timer ${ROUND_SECS - elapsed < 10 ? "hot" : ""}`}><i style={{ width: `${(elapsed / ROUND_SECS) * 100}%` }} /><b>{Math.ceil(ROUND_SECS - elapsed)}</b></span>}
-            </div>
-            <Chart points={hist.current.points} marks={hist.current.marks} shocks={t.shocks.filter((s) => s.bps !== 0)} future={future} elapsed={phase === 2 ? Math.min(elapsed, ROUND_SECS) : settled ? ROUND_SECS : 0} open={openPrice} colors={SEAT_COLORS} />
-
-            {flash && <div key={flash.id} className={`newsflash ${flash.bps > 0 ? "good" : "bad"}`}><span>BREAKING</span><b>{flash.bps > 0 ? "SOL SURGES" : "SOL DUMPS"} {pct(flash.bps)}</b></div>}
-            {insider && trading && nextShock && (
-              <div className="tip"><span>TIP-OFF</span> News in <b>{Math.max(0, Math.ceil(nextShock.at - elapsed))}s</b>: <b className={nextShock.bps > 0 ? "up" : "down"}>{pct(nextShock.bps)}</b></div>
-            )}
-            {(phase === 0 || (phase === 3 && !seated)) && <div className="overlay soft"><h2>{mySeat >= 0 ? "Dealing you in…" : "Take a seat to play"}</h2><p>Bots fill the empty seats. One of the six will be the insider.</p></div>}
-            {phase === 1 && <div className="overlay"><div className="cards">{Array.from({ length: SEATS }, (_, k) => <i key={k} style={{ animationDelay: `${k * 0.12}s` }} />)}</div><h2>Dealing secret roles</h2><p>MagicBlock VRF is picking the insider inside the private rollup.</p></div>}
-            {roleCard && roleCard.round === round && (
-              <div className="overlay"><div className={`rolecard ${roleCard.insider ? "ins" : ""}`}>
-                <Avatar seat={Math.max(mySeat, 0)} masked={roleCard.insider} size={110} />
-                <span>Your role</span><h2>{roleCard.insider ? "INSIDER" : "TRADER"}</h2>
-                <p>{roleCard.insider ? "You see every news shock early. Profit, but do not get caught." : "Someone knows the news early. Watch who trades just before it."}</p>
-              </div></div>
-            )}
-            {accusing && (
-              <div className="overlay">
-                <h2>Who was the insider?</h2>
-                <p>{mySeat >= 0 ? (canVote ? "Pick one. Right: +100 and a share of their profit. Wrong: −50." : "Votes are in. Settling…") : "The table is voting in secret."}</p>
-                <div className="lineup">{t.seats.map((s, i) => i !== mySeat && !s.player.equals(ZERO) && (
-                  <button key={i} className={myVote === i ? "picked" : ""} disabled={busy || mySeat < 0 || !canVote} onClick={() => accuse(i)}>
-                    <Avatar seat={i} size={64} /><b>{SEAT_NAMES[i]}</b>{myVote === i && <em>accused</em>}
-                  </button>))}</div>
-                {canVote && <span className="timer wide hot"><i style={{ width: `${((elapsed - ROUND_SECS) / VOTE_SECS) * 100}%` }} /><b>{Math.ceil(ROUND_SECS + VOTE_SECS - elapsed)}</b></span>}
-              </div>
-            )}
-            {settled && stage === 0 && <div className="overlay"><h2 className="pulse">The insider was…</h2></div>}
-            {settled && stage >= 1 && (
-              <div className={`overlay reveal ${t.caught ? "caught" : "escaped"}`}>
-                <Avatar seat={t.insider} masked size={120} />
-                <h2>{SEAT_NAMES[t.insider]}{t.insider === mySeat ? " (you)" : ""}</h2>
-                <div className="stamp">{t.caught ? "CAUGHT" : "GOT AWAY"}</div>
-                {stage === 2 && (
+        <div className={`stage ${flash ? (flash.bps > 0 ? "flashup" : "flashdown") : ""}`}>
+          <div className="canvas" ref={hostRef} />
+          {t.seats.map((s, i) => {
+            const empty = s.player.equals(ZERO), eq = phase === 2 ? equity(s, price, openPrice) : 0, pop = pops[i], last = s.last.toNumber() / 1e6;
+            return (
+              <div key={i} className={`tag ${i === mySeat ? "me" : ""}`} ref={(el) => (tagRefs.current[i] = el)} style={{ ["--c" as any]: SEAT_COLORS[i] }}>
+                {pop && trading && <span key={pop.id} className={`pop ${pop.delta > 0 ? "up" : "down"}`}>{pop.delta > 0 ? "▲ BUY" : "▼ SELL"} {Math.abs(pop.delta)}</span>}
+                {votesFor(i) > 0 && <span className="votes">{votesFor(i)} {votesFor(i) === 1 ? "vote" : "votes"}</span>}
+                {empty ? (canSit ? <button className="sit" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, i))}>Sit here</button> : <span className="muted small">open</span>) : (
                   <>
-                    <p>{t.caught ? "Fined 100 chips. Their profit is split between the accusers." : "Nobody pinned it on them. Their profit doubles."}</p>
-                    {seat && <div className={`mine ${seat.last.toNumber() >= 0 ? "up" : "down"}`}>You: {chips(seat.last.toNumber() / 1e6)} chips</div>}
-                    <p className="muted small">{mySeat >= 0 ? `Next round in ${nextIn}s` : canSit ? "Take an empty seat to join the next round" : ""}</p>
+                    <b>{SEAT_NAMES[i]}{i === mySeat && <em>you</em>}</b>
+                    {phase === 2 && !accusing && <span className={eq >= 0 ? "up" : "down"}>{chips(eq)}</span>}
+                    {settled && stage === 2 && <span className={last >= 0 ? "up big" : "down big"}>{chips(last)}</span>}
+                    {accusing && i !== mySeat && mySeat >= 0 && canVote && <button className={`accuse ${myVote === i ? "picked" : ""}`} disabled={busy} onClick={() => accuse(i)}>{myVote === i ? "Accused" : "Accuse"}</button>}
                   </>
                 )}
               </div>
-            )}
+            );
+          })}
+
+          <div className="hud tl">
+            <span className="chip live">● SEALED IN TEE</span>
+            <span className="chip">MagicBlock private rollup</span>
           </div>
-          <div className="rowseats">{[3, 4, 5].map(seatEl)}</div>
+          <div className="hud tr">
+            {trading && <span className={`timer ${ROUND_SECS - elapsed < 10 ? "hot" : ""}`}><i style={{ width: `${(elapsed / ROUND_SECS) * 100}%` }} /><b>{Math.ceil(ROUND_SECS - elapsed)}</b></span>}
+            {accusing && canVote && <span className="timer hot"><i style={{ width: `${((elapsed - ROUND_SECS) / VOTE_SECS) * 100}%` }} /><b>{Math.ceil(ROUND_SECS + VOTE_SECS - elapsed)}</b></span>}
+          </div>
+
+          {flash && <div key={flash.id} className={`newsflash ${flash.bps > 0 ? "good" : "bad"}`}><span>BREAKING</span><b>{flash.bps > 0 ? "SOL SURGES" : "SOL DUMPS"} {pct(flash.bps)}</b></div>}
+          {insider && trading && nextShock && (
+            <div className="tip"><span>TIP-OFF</span> News in <b>{Math.max(0, Math.ceil(nextShock.at - elapsed))}s</b>: <b className={nextShock.bps > 0 ? "up" : "down"}>{pct(nextShock.bps)}</b></div>
+          )}
+          {roleCard && roleCard.round === round && (
+            <div className="overlay clear"><div className={`rolecard ${roleCard.insider ? "ins" : ""}`}>
+              <span>Your role</span><h2>{roleCard.insider ? "INSIDER" : "TRADER"}</h2>
+              <p>{roleCard.insider ? "You see every news shock early. Profit, but do not get caught." : "Someone knows the news early. Watch who trades just before it."}</p>
+            </div></div>
+          )}
+          {accusing && <div className="caption"><h2>Who was the insider?</h2><p>{mySeat >= 0 ? (canVote ? "Click a trader to accuse. Right: +100 and a share of their profit. Wrong: −50." : "Votes are in. Settling…") : "The floor is voting in secret."}</p></div>}
+          {settled && stage === 0 && <div className="caption"><h2 className="pulse">The insider was…</h2></div>}
+          {settled && stage >= 1 && (
+            <div className={`caption reveal ${t.caught ? "caught" : "escaped"}`}>
+              <h2>{SEAT_NAMES[t.insider]}{t.insider === mySeat ? " (you)" : ""}</h2>
+              <div className="stamp">{t.caught ? "CAUGHT" : "GOT AWAY"}</div>
+              {stage === 2 && <p>{t.caught ? "Fined 100 chips. Their profit is split between the accusers." : "Nobody pinned it on them. Their profit doubles."}{seat && <b className={seat.last.toNumber() >= 0 ? "up" : "down"}> You: {chips(seat.last.toNumber() / 1e6)} chips.</b>} {mySeat >= 0 ? `Next round in ${nextIn}s.` : ""}</p>}
+            </div>
+          )}
         </div>
 
         <aside className="sidebar">
