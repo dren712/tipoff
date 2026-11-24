@@ -48,7 +48,7 @@ fn lots_value(lots: i64, price: i64, open: i64) -> Result<i64> {
 
 pub fn apply_trade(seat: &mut Seat, delta: i8, price: i64, open: i64) -> Result<()> {
     let pos = seat.pos.checked_add(delta).ok_or(TipoffError::PositionLimit)?;
-    require!(delta != 0 && pos.abs() <= MAX_POS, TipoffError::PositionLimit);
+    require!(delta != 0 && (-MAX_POS..=MAX_POS).contains(&pos), TipoffError::PositionLimit);
     seat.cash = seat
         .cash
         .checked_sub(lots_value(delta as i64, price, open)?)
@@ -317,9 +317,9 @@ mod tests {
 
     // Suspected bug: `pos.abs()` on line 51 panics (`attempt to negate with overflow`) when
     // `seat.pos + delta == i8::MIN` (`-128`), instead of returning `Err(TipoffError::PositionLimit)`.
+    
     #[test]
-    #[ignore]
-    fn suspected_bug_apply_trade_i8_min_panics_instead_of_position_limit() {
+    fn apply_trade_i8_min_is_position_limit() {
         let mut s = Seat::default();
         assert_tipoff_err(apply_trade(&mut s, i8::MIN, P, P), TipoffError::PositionLimit);
     }

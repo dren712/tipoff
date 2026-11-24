@@ -40,7 +40,7 @@ pub fn read_price(feed: &AccountInfo, now: i64) -> Result<i64> {
     let u = PriceUpdate::deserialize(&mut &data[8..]).map_err(|_| TipoffError::BadPrice)?;
     require!(u.feed_id == SOL_USD_FEED.to_bytes(), TipoffError::BadPrice);
     require!(u.posted_slot > 0 && u.price > 0, TipoffError::BadPrice);
-    require!((now - u.publish_time).abs() <= MAX_AGE_SECS, TipoffError::BadPrice);
+    require!(now.abs_diff(u.publish_time) <= MAX_AGE_SECS as u64, TipoffError::BadPrice);
     Ok(u.price)
 }
 
@@ -206,9 +206,9 @@ mod tests {
     // Suspected bug: `(now - u.publish_time).abs()` on line 43 panics with arithmetic
     // overflow when `publish_time` is `i64::MIN` (or when `now - publish_time == i64::MIN`)
     // instead of returning `Err(TipoffError::BadPrice)`.
+    
     #[test]
-    #[ignore]
-    fn suspected_bug_read_price_extreme_timestamp_panics_instead_of_bad_price() {
+    fn read_price_extreme_timestamp_is_bad_price() {
         let id = SOL_USD_FEED.to_bytes();
         assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 100, i64::MIN, 1), NOW));
     }
