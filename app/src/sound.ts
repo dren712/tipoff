@@ -1,35 +1,72 @@
-// Small synthesised sound effects, so the game needs no audio files.
+// Sound: CC0 samples from app/public/assets/sfx (see the README there), played through Web Audio.
 let ctx: AudioContext | null = null;
+let music: HTMLAudioElement | null = null;
 let muted = localStorage.getItem("tipoff-mute") === "1";
+const buffers = new Map<string, Promise<AudioBuffer | null>>();
+const url = (f: string) => `${import.meta.env.BASE_URL}assets/sfx/${f}`;
 
 export const isMuted = () => muted;
-export function setMuted(m: boolean) { muted = m; localStorage.setItem("tipoff-mute", m ? "1" : "0"); }
+export function setMuted(m: boolean) {
+  muted = m;
+  localStorage.setItem("tipoff-mute", m ? "1" : "0");
+  if (music) m ? music.pause() : void music.play().catch(() => {});
+}
 
-function tone(freq: number, dur: number, type: OscillatorType = "sine", gain = 0.06, delay = 0, slide = 0) {
-  if (muted) return;
+function audio(): AudioContext | null {
   try {
     ctx ??= new AudioContext();
     if (ctx.state === "suspended") void ctx.resume();
-    const t = ctx.currentTime + delay, o = ctx.createOscillator(), g = ctx.createGain();
-    o.type = type;
-    o.frequency.setValueAtTime(freq, t);
-    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), t + dur);
-    g.gain.setValueAtTime(gain, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g).connect(ctx.destination);
-    o.start(t);
-    o.stop(t + dur);
-  } catch { /* audio is optional */ }
+    return ctx;
+  } catch { return null; }
+}
+
+function load(name: string) {
+  let b = buffers.get(name);
+  if (!b) {
+    b = fetch(url(`${name}.ogg`)).then((r) => r.arrayBuffer()).then((a) => audio()!.decodeAudioData(a)).catch(() => null);
+    buffers.set(name, b);
+  }
+  return b;
+}
+
+function play(name: string, gain = 0.5, delay = 0, rate = 1) {
+  if (muted) return;
+  void load(name).then((buf) => {
+    const c = audio();
+    if (!buf || !c || muted) return;
+    const src = c.createBufferSource(), g = c.createGain();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    g.gain.value = gain;
+    src.connect(g).connect(c.destination);
+    src.start(c.currentTime + delay);
+  });
+}
+
+const any = (base: string, n: number, from = 1) => `${base}${from + Math.floor(Math.random() * n)}`;
+
+/// Starts the music loop. Browsers only allow this after a click, so call it from one.
+export function startMusic() {
+  if (music) return;
+  music = new Audio(url("music.mp3"));
+  music.loop = true;
+  music.volume = 0.16;
+  if (!muted) void music.play().catch(() => { music = null; });
 }
 
 export const sfx = {
-  tick: (up: boolean) => tone(up ? 660 : 440, 0.06, "square", 0.025),
-  mine: (up: boolean) => { tone(up ? 520 : 392, 0.08, "triangle", 0.08); tone(up ? 784 : 294, 0.12, "triangle", 0.08, 0.07); },
-  news: (up: boolean) => { tone(up ? 300 : 500, 0.45, "sawtooth", 0.07, 0, up ? 600 : -350); tone(up ? 900 : 150, 0.3, "square", 0.04, 0.4); },
-  role: (insider: boolean) => insider ? [196, 233, 277].forEach((f, i) => tone(f, 0.5, "sawtooth", 0.05, i * 0.16)) : [523, 659].forEach((f, i) => tone(f, 0.18, "triangle", 0.07, i * 0.1)),
-  bell: () => [880, 1108, 880].forEach((f, i) => tone(f, 0.35, "sine", 0.09, i * 0.18)),
-  vote: () => tone(330, 0.2, "square", 0.05, 0, -120),
-  drum: () => Array.from({ length: 10 }, (_, i) => tone(110, 0.07, "triangle", 0.09, i * 0.14)),
-  caught: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.3, "triangle", 0.08, i * 0.11)),
-  escaped: () => [392, 349, 311, 233].forEach((f, i) => tone(f, 0.4, "sawtooth", 0.05, i * 0.16)),
+  tick: (up: boolean) => play(`footstep0${Math.floor(Math.random() * 10)}`, 0.22, 0, up ? 1.15 : 0.9),
+  mine: (up: boolean) => { play(up ? "confirmation_001" : "select_003", 0.5); play(any("chips-stack-", 6), 0.5, 0.03); },
+  denied: () => play("error_004", 0.6),
+  news: (up: boolean) => { play("lowFrequency_explosion_000", 0.9); play(up ? "phaserUp3" : "phaserDown2", 0.45, 0.05); play("handleCoins", 0.5, 0.35); },
+  tip: () => play("glitch_002", 0.6),
+  role: (insider: boolean) => { play(insider ? "forceField_002" : "powerUp5", 0.5); play("begin", 0.6, 0.5); },
+  bell: () => { play("doorOpen_001", 0.5); play("prepare_yourself", 0.6, 0.2); },
+  sudden: () => play("sudden_death", 0.7),
+  count: (n: 1 | 2 | 3) => play(String(n), 0.6),
+  time: () => { play("bong_001", 0.7); play("time", 0.7, 0.1); },
+  vote: () => { play("metalLatch", 0.6); play("laserSmall_002", 0.3, 0.05); },
+  drum: () => { for (let i = 0; i < 10; i++) play("tick_001", 0.5, i * 0.14, 0.7); },
+  caught: () => { play("impactMetal_002", 0.8); play("jingle_caught", 0.6, 0.15); play("winner", 0.6, 0.6); },
+  escaped: () => { play("zapThreeToneDown", 0.5); play("jingle_escaped", 0.6, 0.2); play("handleCoins", 0.6, 0.4); },
 };

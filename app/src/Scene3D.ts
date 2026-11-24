@@ -332,10 +332,10 @@ export class Scene3D {
     this.cage.visible = v.stage === "reveal" && v.caught && !!this.bots[v.insider];
     this.bots.forEach((b, i) => {
       const s = v.seats[i], col = this.col.set(this.colors[i]);
-      b.body.visible = !s.empty;
+      if (v.stage !== "reveal") b.body.visible = !s.empty;
       (b.ring.material as THREE.MeshBasicMaterial).opacity = i === v.me ? 0.95 : 0;
       (b.ring.material as THREE.MeshBasicMaterial).color.set(i === v.me && v.insiderMe ? MAGENTA : col);
-      if (changed || prev?.seats[i].empty !== s.empty) {
+      if (changed || (v.stage !== "reveal" && prev?.seats[i].empty !== s.empty)) {
         b.main.color.copy(col);
         b.main.emissive.set(0);
         b.down = 0;
@@ -483,7 +483,7 @@ export class Scene3D {
     else if (stage === "reveal" && this.bots[v!.insider]) {
       const p = this.bots[v!.insider].root.position, k = Math.min(1, (t - this.stageAt) / 1.5);
       this.camPos.set(p.x * 0.8, 2.3, p.z + (7.5 - 3.4 * k) * a); this.camLook.set(p.x, 1.3, p.z);
-    } else { this.camPos.set(Math.sin(t * 0.05) * 22 * a, 8, Math.cos(t * 0.05) * 22 * a); this.camLook.set(0, 2, -3); }
+    } else { this.camPos.set(Math.sin(t * 0.2) * 3.5, 6.2, 15 * a); this.camLook.set(0, 3.6, -4); }
     this.fov += ((this.flash > 0.75 ? fov - 6 : fov) - this.fov) * 0.12;
   }
 
@@ -542,7 +542,7 @@ export class Scene3D {
       b.down = Math.max(0, b.down - dt);
       if (b.down === 0 && b.current === "Death" && stage === "live") { this.play(b, "Idle"); this.express(b, "Sad"); }
       // Walk to where the chain says this robot stands.
-      if (v && s && !s.empty && b.down === 0 && !(stage === "reveal" && i === v.insider)) {
+      if (v && s && b.body.visible && b.down === 0 && !(stage === "reveal" && i === v.insider)) {
         const to = this.spot(i, v), d = to.sub(b.root.position), len = d.length();
         if (len > 0.04) {
           const step = Math.min(len, (dark ? 5 : 7.5) * dt);
@@ -563,7 +563,7 @@ export class Scene3D {
       b.ring.scale.setScalar(1 + Math.sin(t * 3) * 0.05);
 
       const world = b.root.getWorldPosition(new THREE.Vector3());
-      const lit = s?.empty ? 0 : stage === "vote" ? (this.hot === i ? 90 : 45) : stage === "drum" ? (Math.floor(t * 9) % N === i ? 90 : 3) : stage === "reveal" ? (i === v!.insider ? 110 : 0) : 0;
+      const lit = !b.body.visible ? 0 : stage === "vote" ? (this.hot === i ? 90 : 45) : stage === "drum" ? (Math.floor(t * 9) % N === i ? 90 : 3) : stage === "reveal" ? (i === v!.insider ? 110 : 0) : 0;
       b.spot.position.set(world.x, 11, world.z + 3);
       b.spot.intensity += (lit - b.spot.intensity) * Math.min(1, raw * 8);
       b.spot.color.set(stage === "reveal" && i === v!.insider ? MAGENTA : 0xffffff);
