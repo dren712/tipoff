@@ -70,3 +70,5 @@ export const sfx = {
   caught: () => { play("impactMetal_002", 0.8); play("jingle_caught", 0.6, 0.15); play("winner", 0.6, 0.6); },
   escaped: () => { play("zapThreeToneDown", 0.5); play("jingle_escaped", 0.6, 0.2); play("handleCoins", 0.6, 0.4); },
 };
+
+if (typeof window !== "undefined") window.addEventListener("pointerdown", startMusic, { once: true });

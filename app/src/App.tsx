@@ -143,6 +143,7 @@ function Backdrop({ tables, featured, now }: { tables: (Table | null)[]; feature
   useEffect(() => {
     if (!host.current) return;
     const s = (scene.current = new Scene3D(host.current, SEAT_COLORS, () => [], () => {}));
+    s.orbit = true;
     return () => { s.dispose(); scene.current = null; };
   }, []);
   useEffect(() => {

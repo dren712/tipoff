@@ -21,7 +21,7 @@ export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boo
 
 const N = 6, TILE = 1.6, GREEN = 0x3ddc97, RED = 0xff5c6c, MAGENTA = 0xff3df0, GOLD = 0xf5b83d;
 const laneX = (i: number) => (i - 2.5) * 2;
-const VAULT = new THREE.Vector3(-9.6, 3.4, -3);
+const VAULT = new THREE.Vector3(-10.5, 4.2, -9);
 
 type Bot = {
   root: THREE.Group; body: THREE.Object3D; mixer: THREE.AnimationMixer; actions: Record<string, THREE.AnimationAction>; current: string;
@@ -88,6 +88,8 @@ export class Scene3D {
   private tmp = new THREE.Object3D();
   private col = new THREE.Color();
   ready = false;
+  /// Lobby backdrop: circle the floor instead of framing a seat.
+  orbit = false;
 
   constructor(private host: HTMLElement, private colors: string[], private tags: () => (HTMLElement | null)[], private onPick: (seat: number) => void) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -160,20 +162,20 @@ export class Scene3D {
     this.wallTex = new THREE.CanvasTexture(this.wallCanvas);
     this.wallTex.colorSpace = THREE.SRGBColorSpace;
     this.wallMat = new THREE.MeshBasicMaterial({ map: this.wallTex, toneMapped: false });
-    const wall = new THREE.Mesh(new THREE.PlaneGeometry(22, 9.6), this.wallMat);
-    wall.position.set(0, 10.2, -13);
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(22.6, 10.2, 0.5), metal);
-    frame.position.set(0, 10.2, -13.3);
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(18, 7.9), this.wallMat);
+    wall.position.set(0, 8.7, -13);
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(18.5, 8.4, 0.5), metal);
+    frame.position.set(0, 8.7, -13.3);
     this.scene.add(wall, frame);
 
     // The Vault: the TEE, where the insider's name and the news are sealed.
-    const cube = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 3), new THREE.MeshStandardMaterial({ color: 0x050308, roughness: 0.15, metalness: 1 }));
+    const cube = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.4, 2.4), new THREE.MeshStandardMaterial({ color: 0x050308, roughness: 0.15, metalness: 1 }));
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(cube.geometry), new THREE.LineBasicMaterial({ color: MAGENTA, toneMapped: false }));
     const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.7), new THREE.MeshBasicMaterial({ color: MAGENTA, toneMapped: false, wireframe: true }));
     this.vault.add(cube, edges, core);
     this.vault.position.copy(VAULT);
     const tag = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 0.6), label("SEALED · TEE", "#ff8af7", 768, 110));
-    tag.position.set(VAULT.x, VAULT.y + 2.7, VAULT.z);
+    tag.position.set(VAULT.x, VAULT.y + 2.1, VAULT.z);
     const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 16), new THREE.MeshBasicMaterial({ color: 0x5a1a66, toneMapped: false }));
     stem.position.set(VAULT.x, VAULT.y - 9.5, VAULT.z);
     this.scene.add(this.vault, tag, stem);
@@ -366,21 +368,7 @@ export class Scene3D {
     c.fillRect(0, 0, W, H);
     const up = w.price >= w.open, usd = (p: number) => (p / 1e8).toFixed(2);
     c.textBaseline = "top";
-    c.font = "800 84px Inter, system-ui, sans-serif";
-    c.fillStyle = "#fff";
-    c.fillText(w.price ? `$${usd(w.price)}` : "—", 40, 28);
-    const pw = c.measureText(w.price ? `$${usd(w.price)}` : "—").width;
-    if (w.open && w.price) {
-      c.font = "700 40px Inter, system-ui, sans-serif";
-      c.fillStyle = up ? "#3ddc97" : "#ff6b6b";
-      c.fillText(`${up ? "▲" : "▼"} ${Math.abs(((w.price - w.open) / w.open) * 100).toFixed(2)}%`, 70 + pw, 62);
-    }
-    c.font = "600 26px Inter, system-ui, sans-serif";
-    c.fillStyle = "#6b7a99";
-    c.textAlign = "right";
-    c.fillText(`SOL / USD · ROUND ${w.round}`, W - 40, 34);
-    c.textAlign = "left";
-    const x0 = 50, x1 = W - 110, y0 = 150, y1 = H - 60, X = (t: number) => x0 + (t / 60) * (x1 - x0);
+    const x0 = 50, x1 = W - 110, y0 = 50, y1 = H - 60, X = (t: number) => x0 + (t / 60) * (x1 - x0);
     const ps = [...w.points.map((p) => p.p), ...w.marks.map((m) => m.p), w.open || w.price].filter(Boolean);
     let lo = Math.min(...ps), hi = Math.max(...ps);
     const pad = Math.max((hi - lo) * 0.15, (w.open || 1) * 0.004);
@@ -430,18 +418,6 @@ export class Scene3D {
       c.fillStyle = this.colors[m.seat];
       c.beginPath(); c.moveTo(x, y + d * 12); c.lineTo(x - 11, y + d * 32); c.lineTo(x + 11, y + d * 32); c.closePath(); c.fill();
     }
-    if (w.title) {
-      c.fillStyle = "rgba(5,7,12,.86)";
-      c.fillRect(0, 0, W, H);
-      c.textAlign = "center";
-      c.fillStyle = "#fff";
-      c.font = "800 96px Inter, system-ui, sans-serif";
-      c.fillText(w.title, W / 2, H / 2 - 90);
-      c.fillStyle = "#8fa0c2";
-      c.font = "600 38px Inter, system-ui, sans-serif";
-      c.fillText(w.sub, W / 2, H / 2 + 40);
-      c.textAlign = "left";
-    }
     this.wallTex.needsUpdate = true;
   }
 
@@ -454,6 +430,11 @@ export class Scene3D {
     return o ? (o.userData.seat as number) : -1;
   }
   private hot = -1;
+  private quality = 2;
+  private frames = 0;
+  private spent = 0;
+  /// Renderer facts for the proof panel and QA.
+  stats() { const i = this.renderer.info; return { quality: this.quality, calls: i.render.calls, triangles: i.render.triangles, ratio: this.renderer.getPixelRatio() }; }
   private click = (e: MouseEvent) => { const s = this.pick(e); if (s >= 0 && this.view?.stage === "vote" && s !== this.view.me && !this.view.seats[s].empty) this.onPick(s); };
   private hover = (e: PointerEvent) => {
     const s = this.view?.stage === "vote" ? this.pick(e) : -1;
@@ -474,7 +455,8 @@ export class Scene3D {
     const a = Math.max(1, 1.5 / this.camera.aspect), stage = v?.stage ?? "idle";
     const meX = v && v.me >= 0 ? laneX(v.me) : 0, me = v && v.me >= 0 ? this.bots[v.me] : undefined;
     let fov = 50;
-    if (stage === "live") {
+    if (this.orbit) { this.camPos.set(Math.sin(t * 0.08) * 20 * a, 7.5, Math.cos(t * 0.08) * 20 * a); this.camLook.set(0, 2.5, -2); }
+    else if (stage === "live") {
       const last = v!.wall.elapsed >= 50, z = me ? me.root.position.z * 0.15 : 0;
       if (last) { this.camPos.set(meX * 0.5, 5.6, 14 * a + z); this.camLook.set(0, 4, -3.5); fov = 56; }
       else { this.camPos.set(meX * 0.5, 7.4, 15.2 * a + z); this.camLook.set(meX * 0.3, 4.3, -4); }
@@ -482,15 +464,15 @@ export class Scene3D {
     else if (stage === "vote" || stage === "drum") { this.camPos.set(this.hot >= 0 ? laneX(this.hot) * 0.12 : 0, 2.7, 16.6 * a); this.camLook.set(0, 1.55, 6.6); }
     else if (stage === "reveal" && this.bots[v!.insider]) {
       const p = this.bots[v!.insider].root.position, k = Math.min(1, (t - this.stageAt) / 1.5);
-      this.camPos.set(p.x * 0.8, 2.3, p.z + (7.5 - 3.4 * k) * a); this.camLook.set(p.x, 1.3, p.z);
-    } else { this.camPos.set(Math.sin(t * 0.2) * 3.5, 6.2, 15 * a); this.camLook.set(0, 3.6, -4); }
+      this.camPos.set(p.x * 0.8, 2.6, p.z + (9 - 2.5 * k) * a); this.camLook.set(p.x, 2.9, p.z);
+    } else { this.camPos.set(Math.sin(t * 0.2) * 2.5, 6.2, 15 * a); this.camLook.set(0, 3.6, -4); }
     this.fov += ((this.flash > 0.75 ? fov - 6 : fov) - this.fov) * 0.12;
   }
 
   private loop = () => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.loop);
-    const raw = Math.min(this.clock.getDelta(), 0.05), t = this.clock.elapsedTime, v = this.view;
+    const raw = Math.min(this.clock.getDelta(), 0.1), t = this.clock.elapsedTime, v = this.view;
     this.slow = Math.max(0, this.slow - raw);
     const dt = raw * (this.slow > 0 ? 0.3 : 1);
     const stage = v?.stage ?? "idle", dark = this.lined(stage), last = stage === "live" && v!.wall.elapsed >= 50;
@@ -545,12 +527,12 @@ export class Scene3D {
       if (v && s && b.body.visible && b.down === 0 && !(stage === "reveal" && i === v.insider)) {
         const to = this.spot(i, v), d = to.sub(b.root.position), len = d.length();
         if (len > 0.04) {
-          const step = Math.min(len, (dark ? 5 : 7.5) * dt);
+          const step = Math.min(len, (dark ? 10 : 7.5) * dt);
           b.root.position.addScaledVector(d, step / len);
           b.yaw = Math.atan2(d.x, d.z);
           b.trail += step;
           if (stage === "live" && b.trail > 0.75) { b.trail = 0; this.print(b.root.position, i); }
-          if (!b.moving) { b.moving = true; this.play(b, dark ? "Walking" : "Running"); }
+          if (!b.moving) { b.moving = true; this.play(b, "Running"); }
         } else if (b.moving) { b.moving = false; this.play(b, "Idle"); }
         if (!b.moving) b.yaw = dark ? 0 : Math.PI;
       }
@@ -584,7 +566,7 @@ export class Scene3D {
       if (el) {
         const p = world.setY(world.y + 2.25).project(this.camera);
         el.style.transform = `translate(-50%,-100%) translate(${((p.x + 1) / 2) * this.host.clientWidth}px,${((1 - p.y) / 2) * this.host.clientHeight}px)`;
-        el.style.opacity = p.z < 1 ? "1" : "0";
+        el.style.opacity = p.z < 1 && stage !== "reveal" ? "1" : "0";
       }
     });
 
@@ -614,6 +596,22 @@ export class Scene3D {
     if (this.cage.visible) { this.cage.position.y = Math.max(0, this.cage.position.y - raw * 14); this.cage.rotation.y += raw * 0.6; }
 
     this.composer.render();
+    // Slow machine: drop shadows and resolution first, then bloom, so the game and its rollup calls stay responsive.
+    this.frames++;
+    this.spent += raw;
+    if (this.frames === 45) {
+      if (this.spent / 45 > 0.03 && this.quality > 0) {
+        this.quality--;
+        this.renderer.shadowMap.enabled = false;
+        this.key.castShadow = false;
+        this.bloom.enabled = this.quality > 0;
+        this.renderer.setPixelRatio(this.quality ? 1 : 0.75);
+        this.composer.setPixelRatio(this.quality ? 1 : 0.75);
+        this.resize();
+      }
+      this.frames = 0;
+      this.spent = 0;
+    }
   };
 
   private print(at: THREE.Vector3, seat: number) {
