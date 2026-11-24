@@ -3,7 +3,9 @@ import {
   FIRST_TABLE, MAX_POS, NONE, ROUND_SECS, SEATS, Session, Table, SeatPrivate, VOTE_SECS, ZERO, actions, base, equity, explorer,
   fetchSeat, fetchTable, ledgerPda, redraw, secretPda, seatPda, short, tablePda,
 } from "./chain";
+import { Chart } from "./Chart";
 import type { Point, Mark } from "./Chart";
+import { Icon, Logo } from "./Icon";
 import { Avatar, SEAT_COLORS, SEAT_NAMES } from "./Avatar";
 import { isMuted, setMuted, sfx } from "./sound";
 import { Scene3D, Stage } from "./Scene3D";
@@ -15,7 +17,7 @@ type Line = { ok: boolean; text: string; href?: string };
 type Pop = { id: number; delta: number };
 type Hist = { round: string; points: Point[]; marks: Mark[]; seen: number; shocks: number; phase: number };
 
-export function TableView({ session, index, onLeave, onLatency }: { session: Session; index: number; onLeave: () => void; onLatency: (ms: number) => void }) {
+export function TableView({ session, index, median, onLeave, onLatency }: { session: Session; index: number; median: number | null; onLeave: () => void; onLatency: (ms: number) => void }) {
   const key = useMemo(() => tablePda(FIRST_TABLE + index), [index]);
   const [t, setT] = useState<Table | null>(null);
   const [now, setNow] = useState(Date.now() / 1000);
@@ -23,7 +25,7 @@ export function TableView({ session, index, onLeave, onLatency }: { session: Ses
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [proof, setProof] = useState<Line[]>([]);
-  const [side, setSide] = useState<"tape" | "proof">("tape");
+  const [side, setSide] = useState<"tape" | "proof" | null>(null);
   const [pops, setPops] = useState<Record<number, Pop>>({});
   const [flash, setFlash] = useState<{ id: number; bps: number } | null>(null);
   const [roleCard, setRoleCard] = useState<{ round: string; insider: boolean } | null>(null);
@@ -173,7 +175,11 @@ export function TableView({ session, index, onLeave, onLatency }: { session: Ses
   });
   pick.current = (i) => { if (mySeat >= 0 && canVote && !busy) { sfx.vote(); run(`Accused ${SEAT_NAMES[i]}`, () => actions.vote(session, key, mySeat, i)); } };
 
-  if (!t) return <div className="center muted">Loading table…</div>;
+  if (!t) return (
+    <div className="boot">
+      <div className="bootcard"><Logo size={56} /><h1 className="wordmark">Table {index + 1}</h1><div className="loader"><i /></div><p className="muted">Walking onto the floor</p></div>
+    </div>
+  );
 
   const seated = t.seats.some((s) => !s.player.equals(ZERO));
   const settled = phase === 3 && seated;
@@ -223,115 +229,251 @@ export function TableView({ session, index, onLeave, onLatency }: { session: Ses
     },
   };
 
+  // Presentation only below: which screen is showing and the numbers it prints.
+  const ui: Stage = phase === 1 ? "deal" : trading ? "live" : accusing ? "vote" : settled ? (stage === 0 ? "drum" : "reveal") : "idle";
+  const eq = t.seats.map((s) => (phase === 2 ? equity(s, price, openPrice) : 0));
+  const myEq = mySeat >= 0 ? eq[mySeat] : 0;
+  const change = openPrice && phase >= 2 ? ((price - openPrice) / openPrice) * 100 : 0;
+  const left = trading ? ROUND_SECS - elapsed : accusing && canVote ? ROUND_SECS + VOTE_SECS - elapsed : 0;
+  const frac = trading ? left / ROUND_SECS : accusing && canVote ? left / VOTE_SECS : 0;
+  const firstOpen = t.seats.findIndex((s) => s.player.equals(ZERO));
+  const ranked = t.seats.map((_, i) => i).filter((i) => !t.seats[i].player.equals(ZERO)).sort((a, b) => t.seats[b].last.cmp(t.seats[a].last));
+  const feed = hist.current.marks.slice(-5).reverse();
+  const myLast = seat ? seat.last.toNumber() / 1e6 : 0;
+  const R = 25, C = 2 * Math.PI * R;
+  const priceBox = price > 0 && (
+    <div className="quote">
+      <span className="quote-sym">SOL</span>
+      <b className="num">${usd(price)}</b>
+      {phase >= 2 && openPrice > 0 && <span className={`delta ${change >= 0 ? "up" : "down"}`}><Icon name={change >= 0 ? "up" : "down"} size={11} />{Math.abs(change).toFixed(2)}%</span>}
+    </div>
+  );
+
   return (
-    <main className={`game ${insider ? "asinsider" : ""}`}>
-      <div className="topline">
-        <button className="ghost" onClick={onLeave}>← Tables</button>
-        <b>Table {index + 1}</b><span className="muted">Round {round}</span>
-        <span className="grow" />
-        {mySeat >= 0 && phase === 2 && current && <span className={`badge ${insider ? "ins" : ""}`}>{insider ? "You are the INSIDER" : "You are a trader"}</span>}
-        <button className="ghost" onClick={() => { setMuted(!muted); setMute(!muted); }} aria-label={muted ? "Turn sound on" : "Turn sound off"}>{muted ? "Sound off" : "Sound on"}</button>
+    <main className={`game ui-${ui} ${insider ? "asinsider" : ""} ${mySeat >= 0 ? "seated" : "watching"} ${side ? "drawer-open" : ""}`}>
+      <div className={`stage ${flash ? (flash.bps > 0 ? "flashup" : "flashdown") : ""}`}>
+        <div className="canvas" ref={hostRef} />
+        <div className="scrim" />
+        {t.seats.map((s, i) => {
+          const empty = s.player.equals(ZERO), pop = pops[i], last = s.last.toNumber() / 1e6;
+          return (
+            <div key={i} className={`tag ${i === mySeat ? "me" : ""} ${empty ? "empty" : ""}`} ref={(el) => (tagRefs.current[i] = el)} style={{ ["--c" as any]: SEAT_COLORS[i] }}>
+              {pop && trading && <span key={pop.id} className={`pop ${pop.delta > 0 ? "up" : "down"}`}><Icon name={pop.delta > 0 ? "up" : "down"} size={12} />{pop.delta > 0 ? "BUY" : "SELL"} {Math.abs(pop.delta)}</span>}
+              {votesFor(i) > 0 && <span className="votes"><Icon name="gavel" size={12} />{votesFor(i)}</span>}
+              {empty ? (canSit ? <button className="sit" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, i))}>Sit here</button> : <span className="plate ghost">Open</span>) : (
+                <>
+                  <span className="plate"><b>{SEAT_NAMES[i]}</b>{i === mySeat && <em>You</em>}</span>
+                  {trading && <span className={`tag-pnl num ${eq[i] >= 0 ? "up" : "down"}`}>{chips(eq[i])}</span>}
+                  {accusing && myVote === i && <span className="tag-mark"><Icon name="gavel" size={12} />Accused</span>}
+                  {settled && stage === 2 && <span className={`tag-pnl num big ${last >= 0 ? "up" : "down"}`}>{chips(last)}</span>}
+                </>
+              )}
+            </div>
+          );
+        })}
+
+        {mySeat >= 0 && phase === 2 && current && !roleCard && (
+          <div className={`rolechip ${insider ? "ins" : ""}`}><Icon name={insider ? "eye" : "bolt"} size={15} /><span>You are {insider ? "the insider" : "a trader"}</span></div>
+        )}
+        {insider && trading && nextShock && (
+          <div className="tip" role="status">
+            <span className="tip-tag"><Icon name="eye" size={13} />Tip-off</span>
+            <span className="tip-main">News in <b className="num">{Math.max(0, Math.ceil(nextShock.at - elapsed))}s</b></span>
+            <b className={`tip-move num ${nextShock.bps > 0 ? "up" : "down"}`}><Icon name={nextShock.bps > 0 ? "up" : "down"} size={13} />{pct(nextShock.bps)}</b>
+            {future.length > 1 && <span className="tip-next">then {future.slice(1).map((f) => `${pct(f.bps)} at ${f.at}s`).join(", ")}</span>}
+          </div>
+        )}
+        {flash && (
+          <div key={flash.id} className={`newsflash ${flash.bps > 0 ? "good" : "bad"}`} role="alert">
+            <span className="nf-tag">Breaking</span>
+            <b className="nf-text">{flash.bps > 0 ? "SOL surges" : "SOL dumps"}</b>
+            <b className="nf-move num">{pct(flash.bps)}</b>
+          </div>
+        )}
+
+        {ui === "idle" && <div className="headline quiet"><span className="kicker">Table {index + 1}</span><h2>{mySeat >= 0 ? "Get ready" : "Take a seat"}</h2><p>{mySeat >= 0 ? "The opening bell rings in a few seconds." : "Bots fill the empty desks. Any of the six can be the insider."}</p></div>}
+        {ui === "deal" && <div className="headline"><h2 className="pulse">Dealing secret roles</h2><p>One of the six is being tipped off inside the private rollup.</p></div>}
+        {ui === "vote" && <div className="headline"><h2>Who was the insider?</h2><p>{mySeat >= 0 ? (canVote ? (myVote !== null ? `You accused ${SEAT_NAMES[myVote]}. You can still change it.` : "Pick your suspect. Votes stay sealed until the reveal.") : "Votes are in. Opening the envelope.") : "The floor is voting in secret."}</p></div>}
+        {ui === "drum" && <div className="headline"><h2 className="pulse">The insider was</h2></div>}
+        {ui === "reveal" && (
+          <div className={`headline verdict ${t.caught ? "caught" : "escaped"}`} style={{ ["--c" as any]: SEAT_COLORS[t.insider] }}>
+            <span className="kicker">The insider was</span>
+            <h2 className="culprit">{SEAT_NAMES[t.insider]}{t.insider === mySeat && <em>that's you</em>}</h2>
+            <div className="stamp">{t.caught ? "Caught" : "Got away"}</div>
+            {stage === 2 && <p>{t.caught ? "Fined 100 chips. Their profit is split between the accusers." : "Nobody pinned it on them. Their profit doubles."}</p>}
+          </div>
+        )}
       </div>
 
-      <div className="scene">
-        <div className={`stage ${flash ? (flash.bps > 0 ? "flashup" : "flashdown") : ""}`}>
-          <div className="canvas" ref={hostRef} />
-          {t.seats.map((s, i) => {
-            const empty = s.player.equals(ZERO), eq = phase === 2 ? equity(s, price, openPrice) : 0, pop = pops[i], last = s.last.toNumber() / 1e6;
-            return (
-              <div key={i} className={`tag ${i === mySeat ? "me" : ""}`} ref={(el) => (tagRefs.current[i] = el)} style={{ ["--c" as any]: SEAT_COLORS[i] }}>
-                {pop && trading && <span key={pop.id} className={`pop ${pop.delta > 0 ? "up" : "down"}`}>{pop.delta > 0 ? "▲ BUY" : "▼ SELL"} {Math.abs(pop.delta)}</span>}
-                {votesFor(i) > 0 && <span className="votes">{votesFor(i)} {votesFor(i) === 1 ? "vote" : "votes"}</span>}
-                {empty ? (canSit ? <button className="sit" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, i))}>Sit here</button> : <span className="muted small">open</span>) : (
-                  <>
-                    <b>{SEAT_NAMES[i]}{i === mySeat && <em>you</em>}</b>
-                    {phase === 2 && !accusing && <span className={eq >= 0 ? "up" : "down"}>{chips(eq)}</span>}
-                    {settled && stage === 2 && <span className={last >= 0 ? "up big" : "down big"}>{chips(last)}</span>}
-                    {accusing && i !== mySeat && mySeat >= 0 && canVote && <button className={`accuse ${myVote === i ? "picked" : ""}`} disabled={busy} onClick={() => accuse(i)}>{myVote === i ? "Accused" : "Accuse"}</button>}
-                  </>
-                )}
-              </div>
-            );
-          })}
-
-          <div className="hud tl">
-            <span className="chip live">● SEALED IN TEE</span>
-            <span className="chip">MagicBlock private rollup</span>
-          </div>
-          <div className="hud tr">
-            {trading && <span className={`timer ${ROUND_SECS - elapsed < 10 ? "hot" : ""}`}><i style={{ width: `${(elapsed / ROUND_SECS) * 100}%` }} /><b>{Math.ceil(ROUND_SECS - elapsed)}</b></span>}
-            {accusing && canVote && <span className="timer hot"><i style={{ width: `${((elapsed - ROUND_SECS) / VOTE_SECS) * 100}%` }} /><b>{Math.ceil(ROUND_SECS + VOTE_SECS - elapsed)}</b></span>}
-          </div>
-
-          {flash && <div key={flash.id} className={`newsflash ${flash.bps > 0 ? "good" : "bad"}`}><span>BREAKING</span><b>{flash.bps > 0 ? "SOL SURGES" : "SOL DUMPS"} {pct(flash.bps)}</b></div>}
-          {insider && trading && nextShock && (
-            <div className="tip"><span>TIP-OFF</span> News in <b>{Math.max(0, Math.ceil(nextShock.at - elapsed))}s</b>: <b className={nextShock.bps > 0 ? "up" : "down"}>{pct(nextShock.bps)}</b></div>
-          )}
-          {roleCard && roleCard.round === round && (
-            <div className="overlay clear"><div className={`rolecard ${roleCard.insider ? "ins" : ""}`}>
-              <span>Your role</span><h2>{roleCard.insider ? "INSIDER" : "TRADER"}</h2>
-              <p>{roleCard.insider ? "You see every news shock early. Profit, but do not get caught." : "Someone knows the news early. Watch who trades just before it."}</p>
-            </div></div>
-          )}
-          {accusing && <div className="caption"><h2>Who was the insider?</h2><p>{mySeat >= 0 ? (canVote ? "Click a trader to accuse. Right: +100 and a share of their profit. Wrong: −50." : "Votes are in. Settling…") : "The floor is voting in secret."}</p></div>}
-          {settled && stage === 0 && <div className="caption"><h2 className="pulse">The insider was…</h2></div>}
-          {settled && stage >= 1 && (
-            <div className={`caption reveal ${t.caught ? "caught" : "escaped"}`}>
-              <h2>{SEAT_NAMES[t.insider]}{t.insider === mySeat ? " (you)" : ""}</h2>
-              <div className="stamp">{t.caught ? "CAUGHT" : "GOT AWAY"}</div>
-              {stage === 2 && <p>{t.caught ? "Fined 100 chips. Their profit is split between the accusers." : "Nobody pinned it on them. Their profit doubles."}{seat && <b className={seat.last.toNumber() >= 0 ? "up" : "down"}> You: {chips(seat.last.toNumber() / 1e6)} chips.</b>} {mySeat >= 0 ? `Next round in ${nextIn}s.` : ""}</p>}
-            </div>
-          )}
+      <header className="bar">
+        <div className="bar-left">
+          <button className="iconbtn" onClick={onLeave} aria-label="Back to tables"><Icon name="back" /></button>
+          <div className="plaque"><b>Table {index + 1}</b><span>Round {round}</span></div>
+          <span className="sealed" title="The insider, the shocks and every vote are sealed inside MagicBlock's private rollup (TEE)."><Icon name="lock" size={13} />Sealed in TEE</span>
         </div>
+        <div className="bar-mid">
+          {left > 0 ? (
+            <div className={`clock ${accusing ? "vote" : ""} ${left < 10 ? "hot" : ""}`} role="timer" aria-label={`${Math.ceil(left)} seconds left`}>
+              <svg viewBox="0 0 60 60"><circle cx="30" cy="30" r={R} className="track" /><circle cx="30" cy="30" r={R} className="fill" strokeDasharray={C} strokeDashoffset={C * (1 - Math.max(0, Math.min(1, frac)))} /></svg>
+              <b className="num">{Math.ceil(left)}</b>
+              <span>{accusing ? "Vote" : "Trade"}</span>
+            </div>
+          ) : <div className="phase">{ui === "deal" ? "Dealing" : ui === "vote" ? "Counting votes" : ui === "drum" || ui === "reveal" ? (nextIn > 0 && stage === 2 ? `Next round ${nextIn}s` : "Reveal") : "Waiting for traders"}</div>}
+        </div>
+        <div className="bar-right">
+          {priceBox}
+          {median !== null && <span className="ping" title="Median time for your last moves to confirm on the rollup"><Icon name="bolt" size={12} />{median} ms</span>}
+          <button className={`iconbtn ${side === "tape" ? "on" : ""}`} onClick={() => setSide(side === "tape" ? null : "tape")} aria-label="Trade tape" title="Trade tape"><Icon name="tape" /></button>
+          <button className={`iconbtn ${side === "proof" ? "on" : ""}`} onClick={() => setSide(side === "proof" ? null : "proof")} aria-label="Try to cheat" title="Try to cheat"><Icon name="shield" /></button>
+          <button className="iconbtn" onClick={() => { setMuted(!muted); setMute(!muted); }} aria-label={muted ? "Turn sound on" : "Turn sound off"} title={muted ? "Sound is off" : "Sound is on"}><Icon name={muted ? "mute" : "sound"} /></button>
+        </div>
+      </header>
 
-        <aside className="sidebar">
-          <div className="tabs">
-            <button className={side === "tape" ? "on" : ""} onClick={() => setSide("tape")}>Trade tape</button>
-            <button className={side === "proof" ? "on" : ""} onClick={() => setSide("proof")}>Try to cheat</button>
+      <div className="feed" aria-label="Latest trades">
+        <div className="feed-strip">{priceBox}{seat && phase === 2 && <span className={`mine num ${myEq >= 0 ? "up" : "down"}`}>{chips(myEq)} chips</span>}</div>
+        {(ui === "live" || ui === "vote") && feed.map((m, k) => (
+          <div key={hist.current.marks.length - k} className={`kill ${m.delta > 0 ? "up" : "down"} ${m.seat === mySeat ? "me" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[m.seat] }}>
+            <Avatar seat={m.seat} size={20} /><span className="who">{SEAT_NAMES[m.seat]}</span>
+            <b>{m.delta > 0 ? "BUY" : "SELL"} {Math.abs(m.delta)}</b><span className="at num">{m.t}s</span>
+          </div>
+        ))}
+        {ui === "live" && feed.length === 0 && <div className="feed-empty">Every trade shows up here. Watch who moves just before the news.</div>}
+      </div>
+
+      <footer className="tray">
+        {ui === "live" && seat && (
+          <div className="deck">
+            <button className="trade sell" disabled={!trading || seat.pos <= -MAX_POS} onClick={() => trade(-1)}><Icon name="down" size={22} /><span>Sell</span><kbd>↓</kbd></button>
+            <div className="mypos">
+              <div className="mypos-top">
+                <b className={seat.pos > 0 ? "up" : seat.pos < 0 ? "down" : ""}>{seat.pos > 0 ? `Long ${seat.pos}` : seat.pos < 0 ? `Short ${-seat.pos}` : "Flat"}</b>
+                <span className={`pnl num ${myEq >= 0 ? "up" : "down"}`}>{chips(myEq)}<small>chips</small></span>
+              </div>
+              <div className="lots" aria-hidden="true">{Array.from({ length: MAX_POS * 2 + 1 }, (_, k) => k - MAX_POS).map((v) => (
+                <i key={v} className={v === 0 ? "mid" : (v > 0 && seat.pos >= v) || (v < 0 && seat.pos <= v) ? (v > 0 ? "long" : "shortp") : ""} />))}</div>
+              <div className="mypos-scale"><span>Short 5</span><span>Long 5</span></div>
+            </div>
+            <button className="trade buy" disabled={!trading || seat.pos >= MAX_POS} onClick={() => trade(1)}><Icon name="up" size={22} /><span>Buy</span><kbd>↑</kbd></button>
+          </div>
+        )}
+
+        {(ui === "idle" || ui === "deal") && (
+          <div className="waitbox">
+            {mySeat >= 0 ? <><span className="spinner" /><span><b>You are in as {SEAT_NAMES[mySeat]}.</b> {ui === "deal" ? "Roles are being dealt." : "Waiting for the bell."}</span></>
+              : canSit && firstOpen >= 0 ? <>
+                <button className="btn gold big" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, firstOpen))}><Icon name="seat" size={22} />Take a seat</button>
+                <span className="muted">or pick a desk on the floor</span>
+              </> : <span className="muted">{ui === "deal" ? "Roles are being dealt. You are watching this round." : "All desks are taken. You can watch the next round."}</span>}
+          </div>
+        )}
+
+        {(ui === "vote" || (ui === "live" && !seat)) && (
+          <div className={`ballot ${ui === "vote" && mySeat >= 0 && canVote ? "open" : ""}`}>
+            {ui === "live" && <span className="ballot-note"><Icon name="eye" size={14} />Spectating. Seats open when this round ends.</span>}
+            <div className="suspects">
+              {t.seats.map((s, i) => {
+                const empty = s.player.equals(ZERO), mine = i === mySeat, can = ui === "vote" && mySeat >= 0 && canVote && !mine && !empty;
+                return (
+                  <button key={i} className={`suspect ${myVote === i && ui === "vote" ? "picked" : ""} ${mine ? "self" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[i] }} disabled={!can || busy} onClick={() => accuse(i)}>
+                    <Avatar seat={i} size={38} empty={empty} />
+                    <span className="s-name">{SEAT_NAMES[i]}{mine && <em>You</em>}</span>
+                    <span className={`s-pnl num ${eq[i] >= 0 ? "up" : "down"}`}>{empty ? "–" : chips(eq[i])}</span>
+                    <span className="s-meta">{empty ? "empty" : `${s.trades} ${s.trades === 1 ? "trade" : "trades"}`}</span>
+                    {can && <span className="s-act">{myVote === i ? "Accused" : "Accuse"}</span>}
+                    {myVote === i && ui === "vote" && <span className="s-stamp"><Icon name="gavel" size={13} />Accused</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {ui === "reveal" && stage === 2 && (
+          <div className="results">
+            <div className="results-head">
+              {seat ? <span className={`you num ${myLast >= 0 ? "up" : "down"}`}>You {chips(myLast)} chips</span> : <span className="you">Round {round} results</span>}
+              <span className="grow" />
+              <button className="btn small" onClick={() => { setSide("proof"); cheat.verify(); }}><Icon name="shield" size={15} />Verify the draw</button>
+              {nextIn > 0 && <span className="next num">Next round in {nextIn}s</span>}
+            </div>
+            <div className="suspects">
+              {ranked.map((i, rank) => {
+                const s = t.seats[i], last = s.last.toNumber() / 1e6, v = t.votes[i], got = votesFor(i);
+                return (
+                  <div key={i} className={`suspect score ${i === t.insider ? "insider" : ""} ${i === mySeat ? "self" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[i] }}>
+                    <span className="s-rank">{rank + 1}</span>
+                    <Avatar seat={i} size={38} masked={i === t.insider} />
+                    <span className="s-name">{SEAT_NAMES[i]}{i === mySeat && <em>You</em>}</span>
+                    <span className={`s-pnl num ${last >= 0 ? "up" : "down"}`}>{chips(last)}</span>
+                    <span className="s-meta">{i === t.insider ? <b className="s-ins">Insider</b> : v !== NONE && v < SEATS ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[v] }} />{SEAT_NAMES[v]}</> : "no vote"}</span>
+                    {got > 0 && <span className="s-votes"><Icon name="gavel" size={12} />{got}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </footer>
+
+      {side && (
+        <aside className="drawer" aria-label={side === "tape" ? "Trade tape" : "Try to cheat"}>
+          <div className="drawer-head">
+            <div className="tabs" role="tablist">
+              <button role="tab" aria-selected={side === "tape"} className={side === "tape" ? "on" : ""} onClick={() => setSide("tape")}><Icon name="tape" size={15} />Trade tape</button>
+              <button role="tab" aria-selected={side === "proof"} className={side === "proof" ? "on" : ""} onClick={() => setSide("proof")}><Icon name="shield" size={15} />Try to cheat</button>
+            </div>
+            <button className="iconbtn" onClick={() => setSide(null)} aria-label="Close panel"><Icon name="close" /></button>
           </div>
           {side === "tape" ? (
-            <div className="prints">
-              {hist.current.marks.length === 0 && <span className="muted small">Every trade shows up here for everyone. Look for who moves just before the news.</span>}
-              {[...hist.current.marks].reverse().slice(0, 60).map((m, k) => (
-                <div key={hist.current.marks.length - k} className="print">
-                  <span className="muted">{m.t}s</span><Avatar seat={m.seat} size={20} />
-                  <span>{SEAT_NAMES[m.seat]}</span><b className={m.delta > 0 ? "up" : "down"}>{m.delta > 0 ? "▲" : "▼"} {Math.abs(m.delta)}</b>
-                </div>
-              ))}
+            <div className="drawer-body">
+              <div className="chartbox">
+                <Chart points={hist.current.points} marks={hist.current.marks} shocks={t.shocks.filter((s) => s.bps !== 0 && phase >= 2)} future={future} elapsed={elapsed} open={phase >= 2 ? openPrice : 0} colors={SEAT_COLORS} />
+              </div>
+              <div className="prints">
+                {hist.current.marks.length === 0 && <p className="muted small">Every trade is public and lands here. Look for who moves just before the news.</p>}
+                {[...hist.current.marks].reverse().slice(0, 60).map((m, k) => (
+                  <div key={hist.current.marks.length - k} className={`print ${m.delta > 0 ? "up" : "down"}`}>
+                    <span className="at num">{m.t}s</span><Avatar seat={m.seat} size={20} />
+                    <span className="who">{SEAT_NAMES[m.seat]}</span>
+                    <b>{m.delta > 0 ? "BUY" : "SELL"} {Math.abs(m.delta)}</b><span className="px num">${usd(m.p)}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : (
-            <div className="proofbox">
-              <p className="muted small">Real requests from your browser, with your own key, against the rollup and Solana.</p>
+            <div className="drawer-body">
+              <p className="muted small">Each button sends a real request from this browser, signed with your own key, to the rollup or to Solana.</p>
               <div className="cheats">
-                <button onClick={cheat.secret}>Read the secret</button>
-                <button onClick={cheat.seat}>Read another seat</button>
-                <button onClick={cheat.solana}>Read it from Solana</button>
-                <button onClick={cheat.impersonate} disabled={!trading}>Trade as someone else</button>
-                <button onClick={cheat.verify} disabled={!settled}>Verify the draw</button>
-                <button onClick={cheat.ledger}>Solana record</button>
+                <button onClick={cheat.secret}><Icon name="eye" size={16} /><span>Read the secret</span></button>
+                <button onClick={cheat.seat}><Icon name="lock" size={16} /><span>Read another seat</span></button>
+                <button onClick={cheat.solana}><Icon name="link" size={16} /><span>Read it from Solana</span></button>
+                <button onClick={cheat.impersonate} disabled={!trading}><Icon name="bolt" size={16} /><span>Trade as someone else</span></button>
+                <button onClick={cheat.verify} disabled={!settled}><Icon name="check" size={16} /><span>Verify the draw</span></button>
+                <button onClick={cheat.ledger}><Icon name="clock" size={16} /><span>Solana record</span></button>
               </div>
-              {proof.map((l, k) => (
-                <div key={proof.length - k} className={`line ${l.ok ? "ok" : "bad"}`}>{l.ok ? "✓" : "✗"} {l.text} {l.href && <a href={l.href} target="_blank" rel="noreferrer">Explorer</a>}</div>
-              ))}
+              <div className="prooflog">
+                {proof.length === 0 && <p className="muted small">Results appear here. “Trade as someone else” needs a live round and “Verify the draw” needs a finished one.</p>}
+                {proof.map((l, k) => (
+                  <div key={proof.length - k} className={`line ${l.ok ? "ok" : "bad"}`}>
+                    <span className="verdict-ic"><Icon name={l.ok ? "check" : "close"} size={14} /></span>
+                    <span>{l.text} {l.href && <a href={l.href} target="_blank" rel="noreferrer">Open in Explorer</a>}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </aside>
-      </div>
+      )}
 
-      <div className="deck">
-        {seat ? (
-          <>
-            <button className="sell" disabled={!trading || seat.pos <= -MAX_POS} onClick={() => trade(-1)}>▼ SELL <kbd>↓</kbd></button>
-            <div className="mypos">
-              <div className="lots">{Array.from({ length: MAX_POS * 2 + 1 }, (_, k) => k - MAX_POS).map((v) => (
-                <i key={v} className={v === 0 ? "mid" : (v > 0 && seat.pos >= v) || (v < 0 && seat.pos <= v) ? (v > 0 ? "long" : "shortp") : ""} />))}</div>
-              <b>{seat.pos > 0 ? `Long ${seat.pos}` : seat.pos < 0 ? `Short ${-seat.pos}` : "Flat"}</b>
-              {phase === 2 && <span className={equity(seat, price, openPrice) >= 0 ? "up" : "down"}>{chips(equity(seat, price, openPrice))} chips</span>}
-            </div>
-            <button className="buy" disabled={!trading || seat.pos >= MAX_POS} onClick={() => trade(1)}>▲ BUY <kbd>↑</kbd></button>
-          </>
-        ) : <span className="muted">{canSit ? "Click “Sit here” on an empty seat to play the next round." : "You are watching this round. Seats open when it ends."}</span>}
-      </div>
+      {roleCard && roleCard.round === round && (
+        <div className={`rolecard ${roleCard.insider ? "ins" : ""}`} role="dialog" aria-label="Your role">
+          <div className="rc-rays" />
+          <span className="rc-kicker">Your role</span>
+          {mySeat >= 0 && <Avatar seat={mySeat} size={96} masked={roleCard.insider} />}
+          <h2>{roleCard.insider ? "Insider" : "Trader"}</h2>
+          <p>{roleCard.insider ? "You see every news shock early. Profit, but do not get caught." : "Someone knows the news early. Watch who trades just before it."}</p>
+        </div>
+      )}
       {toast && <div className="toast" role="status">{toast}</div>}
     </main>
   );
