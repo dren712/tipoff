@@ -868,3 +868,161 @@ pub enum TipoffError {
     #[msg("This seat has already voted this round")]
     AlreadyVoted,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account_data<T: AnchorSerialize + Discriminator>(val: &T) -> Vec<u8> {
+        let mut buf = T::DISCRIMINATOR.to_vec();
+        val.serialize(&mut buf).unwrap();
+        buf
+    }
+
+    fn oracle_data(price: i64, publish_time: i64, posted_slot: u64) -> Vec<u8> {
+        let mut d = vec![0u8; 8];
+        d.extend_from_slice(&[7u8; 32]);
+        d.push(1); // VerificationLevel::Full
+        d.extend_from_slice(&oracle::SOL_USD_FEED.to_bytes());
+        d.extend_from_slice(&price.to_le_bytes());
+        d.extend_from_slice(&0u64.to_le_bytes());
+        d.extend_from_slice(&8i32.to_le_bytes());
+        d.extend_from_slice(&publish_time.to_le_bytes());
+        d.extend_from_slice(&publish_time.to_le_bytes());
+        d.extend_from_slice(&price.to_le_bytes());
+        d.extend_from_slice(&0u64.to_le_bytes());
+        d.extend_from_slice(&posted_slot.to_le_bytes());
+        d
+    }
+
+    fn empty_table(round: u64, phase: u8, t_start: i64, oracle_price: i64) -> Table {
+        Table {
+            authority: Pubkey::new_unique(),
+            id: 7103,
+            bump: 255,
+            phase,
+            round,
+            nonce: 1,
+            requested_at: 0,
+            t_start,
+            settled_at: 0,
+            open_price: oracle_price,
+            oracle_price,
+            price: oracle_price,
+            shock_bps: 0,
+            shocks_seen: 0,
+            entropy: [0; 32],
+            seats: [Seat::default(); SEATS],
+            tape: [Print::default(); TAPE],
+            tape_len: 0,
+            insider: NONE,
+            caught: false,
+            votes: [NONE; SEATS],
+            shocks: [Shock::default(); SHOCKS],
+            revealed_salt: [0; 32],
+        }
+    }
+
+    #[test]
+    fn refresh_reveals_shocks_and_handles_oracle_fallback() {
+        let key = Pubkey::new_unique();
+        let owner = ID;
+        let table_key = Pubkey::new_unique();
+        let shocks = [
+            Shock { at: 10, bps: 100 },
+            Shock { at: 22, bps: -150 },
+            Shock { at: 35, bps: 200 },
+            Shock { at: 48, bps: -50 },
+        ];
+        let secret_val = Secret {
+            table: table_key,
+            bump: 254,
+            round: 3,
+            salt: [9u8; 32],
+            insider: 2,
+            shocks,
+        };
+        let mut s_data = account_data(&secret_val);
+        let mut s_lamports = 1u64;
+        let s_ai = AccountInfo::new(&key, false, false, &mut s_lamports, &mut s_data, &owner, false);
+        let secret_acc: Account<Secret> = Account::try_from(&s_ai).unwrap();
+
+        let feed_key = oracle::SOL_USD_FEED;
+        let feed_owner = oracle::ORACLE_PROGRAM;
+        let mut f_data = oracle_data(200_00000000, 1_000, 5);
+        let mut f_lamports = 1u64;
+        let f_ai = AccountInfo::new(&feed_key, false, false, &mut f_lamports, &mut f_data, &feed_owner, false);
+
+        // Non-live phase is a no-op even if secret round differs.
+        let mut idle_t = empty_table(99, Phase::Idle as u8, 1_000, 150_00000000);
+        refresh(&mut idle_t, &secret_acc, &f_ai, 1_005).unwrap();
+        assert_eq!(idle_t.oracle_price, 150_00000000);
+
+        // Round mismatch in Live phase returns BadSecret.
+        let mut wrong_round = empty_table(4, Phase::Live as u8, 1_000, 150_00000000);
+        let err = refresh(&mut wrong_round, &secret_acc, &f_ai, 1_005).unwrap_err();
+        assert_eq!(err, anchor_lang::error::Error::from(TipoffError::BadSecret));
+
+        // Fresh oracle updates price; at elapsed = 22s, first two shocks are revealed (100 - 150 = -50 bps).
+        let mut t = empty_table(3, Phase::Live as u8, 1_000, 150_00000000);
+        refresh(&mut t, &secret_acc, &f_ai, 1_022).unwrap();
+        assert_eq!(t.oracle_price, 200_00000000);
+        assert_eq!(t.shocks_seen, 2);
+        assert_eq!(t.shock_bps, -50);
+        assert_eq!(t.price, shocked(200_00000000, -50).unwrap());
+        assert_eq!(t.shocks[0], shocks[0]);
+        assert_eq!(t.shocks[1], shocks[1]);
+        assert_eq!(t.shocks[2], Shock::default());
+
+        // Stale oracle (> 30s) or post-60s clock keeps last good oracle_price while revealing remaining shocks.
+        refresh(&mut t, &secret_acc, &f_ai, 1_060).unwrap();
+        assert_eq!(t.oracle_price, 200_00000000);
+        assert_eq!(t.shocks_seen, 4);
+        assert_eq!(t.shock_bps, 100);
+        assert_eq!(t.price, shocked(200_00000000, 100).unwrap());
+    }
+
+    #[test]
+    fn deal_seat_and_load_seat_enforce_table_idx_and_role_privacy() {
+        let table_key = Pubkey::new_unique();
+        let seat_key = Pubkey::new_unique();
+        let owner = ID;
+        let draw = Draw {
+            insider: 1,
+            shocks: [
+                Shock { at: 10, bps: 100 },
+                Shock { at: 22, bps: -100 },
+                Shock { at: 35, bps: 150 },
+                Shock { at: 50, bps: -200 },
+            ],
+        };
+
+        // Seat 0 receives ROLE_TRADER and zeroed shocks.
+        let s0_init = SeatPrivate { table: table_key, idx: 0, bump: 255, round: 0, role: 0, shocks: [Shock::default(); SHOCKS], vote: 2 };
+        let mut d0 = account_data(&s0_init);
+        let mut l0 = 1u64;
+        let ai0 = AccountInfo::new(&seat_key, false, true, &mut l0, &mut d0, &owner, false);
+        deal_seat(&ai0, &table_key, 0, 5, &draw).unwrap();
+        let s0_after = load_seat(&ai0, &table_key, 0).unwrap();
+        assert_eq!(s0_after.round, 5);
+        assert_eq!(s0_after.role, ROLE_TRADER);
+        assert_eq!(s0_after.vote, NONE);
+        assert_eq!(s0_after.shocks, [Shock::default(); SHOCKS]);
+
+        // Seat 1 receives ROLE_INSIDER and the full shock schedule.
+        let s1_init = SeatPrivate { table: table_key, idx: 1, bump: 255, round: 0, role: 0, shocks: [Shock::default(); SHOCKS], vote: NONE };
+        let mut d1 = account_data(&s1_init);
+        let mut l1 = 1u64;
+        let ai1 = AccountInfo::new(&seat_key, false, true, &mut l1, &mut d1, &owner, false);
+        deal_seat(&ai1, &table_key, 1, 5, &draw).unwrap();
+        let s1_after = load_seat(&ai1, &table_key, 1).unwrap();
+        assert_eq!(s1_after.role, ROLE_INSIDER);
+        assert_eq!(s1_after.shocks, draw.shocks);
+
+        // Wrong table or wrong idx fails with BadSeat.
+        let err_idx = load_seat(&ai1, &table_key, 2).err().unwrap();
+        assert_eq!(err_idx, anchor_lang::error::Error::from(TipoffError::BadSeat));
+        let err_tbl = load_seat(&ai1, &Pubkey::new_unique(), 1).err().unwrap();
+        assert_eq!(err_tbl, anchor_lang::error::Error::from(TipoffError::BadSeat));
+    }
+}

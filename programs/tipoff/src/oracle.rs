@@ -113,4 +113,103 @@ mod tests {
         assert!(read(SOL_USD_FEED, ORACLE_PROGRAM, vec![], NOW).is_err());
         assert!(read(SOL_USD_FEED, ORACLE_PROGRAM, good()[..60].to_vec(), NOW).is_err());
     }
+
+    fn feed_data_partial(num_sigs: u8, feed_id: [u8; 32], price: i64, publish_time: i64, posted_slot: u64) -> Vec<u8> {
+        let mut d = vec![0u8; 8];
+        d.extend_from_slice(&[7u8; 32]); // write authority
+        d.push(0); // VerificationLevel::Partial
+        d.push(num_sigs);
+        d.extend_from_slice(&feed_id);
+        d.extend_from_slice(&price.to_le_bytes());
+        d.extend_from_slice(&0u64.to_le_bytes());
+        d.extend_from_slice(&8i32.to_le_bytes());
+        d.extend_from_slice(&publish_time.to_le_bytes());
+        d.extend_from_slice(&publish_time.to_le_bytes());
+        d.extend_from_slice(&price.to_le_bytes());
+        d.extend_from_slice(&0u64.to_le_bytes());
+        d.extend_from_slice(&posted_slot.to_le_bytes());
+        d
+    }
+
+    fn assert_bad_price(res: Result<i64>) {
+        let err = res.expect_err("expected BadPrice error");
+        assert_eq!(err, anchor_lang::error::Error::from(TipoffError::BadPrice));
+    }
+
+    #[test]
+    fn rejects_wrong_key_owner_and_feed_id_with_bad_price() {
+        assert_bad_price(read(Pubkey::new_unique(), ORACLE_PROGRAM, good(), NOW));
+        assert_bad_price(read(SOL_USD_FEED, Pubkey::new_unique(), good(), NOW));
+        assert_bad_price(read(Pubkey::new_unique(), Pubkey::new_unique(), good(), NOW));
+
+        // Single bit flipped in feed_id must fail.
+        let mut flipped = SOL_USD_FEED.to_bytes();
+        flipped[31] ^= 1;
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(flipped, 150_00000000, NOW, 99), NOW));
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data([0u8; 32], 150_00000000, NOW, 99), NOW));
+    }
+
+    #[test]
+    fn length_and_verification_level_boundaries() {
+        let full = good();
+        assert_eq!(full.len(), 133); // 8 + 32 + 1 + 32 + 8 + 8 + 4 + 8 + 8 + 8 + 8 + 8
+
+        // Exactly 8 bytes (discriminator only) fails `data.len() > 8`.
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, vec![0u8; 8], NOW));
+        // 9 bytes fails deserialization.
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, full[..9].to_vec(), NOW));
+        // One byte short of full PriceUpdate fails deserialization.
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, full[..full.len() - 1].to_vec(), NOW));
+
+        // Trailing bytes beyond PriceUpdate are tolerated by Borsh deserialize.
+        let mut padded = full.clone();
+        padded.extend_from_slice(&[0xAA; 16]);
+        assert_eq!(read(SOL_USD_FEED, ORACLE_PROGRAM, padded, NOW).unwrap(), 150_00000000);
+
+        // VerificationLevel::Partial shifts payload by 1 byte and succeeds when intact.
+        let partial = feed_data_partial(3, SOL_USD_FEED.to_bytes(), 142_00000000, NOW - 1, 50);
+        assert_eq!(partial.len(), 134);
+        assert_eq!(read(SOL_USD_FEED, ORACLE_PROGRAM, partial[..partial.len() - 1].to_vec(), NOW).unwrap_or(-1), -1);
+        assert_eq!(read(SOL_USD_FEED, ORACLE_PROGRAM, partial, NOW).unwrap(), 142_00000000);
+
+        // Invalid VerificationLevel enum discriminant (2) returns BadPrice.
+        let mut bad_enum = full;
+        bad_enum[40] = 2;
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, bad_enum, NOW));
+    }
+
+    #[test]
+    fn price_slot_and_freshness_exact_boundaries() {
+        let id = SOL_USD_FEED.to_bytes();
+
+        // Price boundaries: 1 and i64::MAX succeed; 0, -1, i64::MIN fail with BadPrice.
+        assert_eq!(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 1, NOW, 1), NOW).unwrap(), 1);
+        assert_eq!(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, i64::MAX, NOW, u64::MAX), NOW).unwrap(), i64::MAX);
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 0, NOW, 1), NOW));
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, -1, NOW, 1), NOW));
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, i64::MIN, NOW, 1), NOW));
+
+        // Slot boundary: 0 fails, 1 succeeds.
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 100, NOW, 0), NOW));
+        assert_eq!(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 100, NOW, 1), NOW).unwrap(), 100);
+
+        // Freshness boundaries at now = NOW and now = 0: [-30, +30] ok, +/-31 fails.
+        for base in [NOW, 0] {
+            assert_eq!(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 100, base, 1), base).unwrap(), 100);
+            assert_eq!(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 100, base - MAX_AGE_SECS, 1), base).unwrap(), 100);
+            assert_eq!(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 100, base + MAX_AGE_SECS, 1), base).unwrap(), 100);
+            assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 100, base - MAX_AGE_SECS - 1, 1), base));
+            assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 100, base + MAX_AGE_SECS + 1, 1), base));
+        }
+    }
+
+    // Suspected bug: `(now - u.publish_time).abs()` on line 43 panics with arithmetic
+    // overflow when `publish_time` is `i64::MIN` (or when `now - publish_time == i64::MIN`)
+    // instead of returning `Err(TipoffError::BadPrice)`.
+    #[test]
+    #[ignore]
+    fn suspected_bug_read_price_extreme_timestamp_panics_instead_of_bad_price() {
+        let id = SOL_USD_FEED.to_bytes();
+        assert_bad_price(read(SOL_USD_FEED, ORACLE_PROGRAM, feed_data(id, 100, i64::MIN, 1), NOW));
+    }
 }
