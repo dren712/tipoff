@@ -4,6 +4,7 @@ import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 
 export type Stage = "idle" | "deal" | "live" | "vote" | "drum" | "reveal";
@@ -18,40 +19,74 @@ export type Wall = {
 };
 export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boolean; insider: number; caught: boolean; wall: Wall };
 
-const N = 6;
-const seatPos = (i: number) => new THREE.Vector3((i - 2.5) * 2.15, 0, Math.pow(Math.abs(i - 2.5), 2) * 0.3 - 1.2);
+const N = 6, TILE = 1.6, GREEN = 0x3ddc97, RED = 0xff5c6c, MAGENTA = 0xff3df0, GOLD = 0xf5b83d;
+const laneX = (i: number) => (i - 2.5) * 2;
+const VAULT = new THREE.Vector3(-9.6, 3.4, -3);
 
 type Bot = {
-  root: THREE.Group; mixer: THREE.AnimationMixer; actions: Record<string, THREE.AnimationAction>; current: string;
-  main: THREE.MeshStandardMaterial; face?: THREE.Mesh; desk: THREE.MeshStandardMaterial; ring: THREE.Mesh; spot: THREE.SpotLight;
-  bars: THREE.Mesh[]; hold: boolean;
+  root: THREE.Group; body: THREE.Object3D; mixer: THREE.AnimationMixer; actions: Record<string, THREE.AnimationAction>; current: string;
+  main: THREE.MeshStandardMaterial; face?: THREE.Mesh; ring: THREE.Mesh; pulse: THREE.Mesh; spot: THREE.SpotLight; beam: THREE.Mesh;
+  hold: boolean; moving: boolean; down: number; yaw: number; trail: number;
 };
+type Coin = { p: THREE.Vector3; v: THREE.Vector3; life: number };
 
-/// The trading floor: six robot traders at desks under a giant price wall.
+function label(text: string, color: string, w = 512, h = 128) {
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d")!;
+  g.font = `900 ${h * 0.72}px Inter, system-ui, sans-serif`;
+  g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = color;
+  g.fillText(text, w / 2, h / 2 + 4);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.MeshBasicMaterial({ map: t, transparent: true, toneMapped: false, side: THREE.DoubleSide });
+}
+
+/// The Floor: six robots on six lanes of a deck balanced over the pit. Where a robot stands is its position:
+/// toward the green gate is long, toward the red gate is short. News makes the deck lurch.
 export class Scene3D {
   private renderer: THREE.WebGLRenderer;
   private composer: EffectComposer;
+  private bloom: UnrealBloomPass;
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(40, 1, 0.1, 200);
+  private camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
   private clock = new THREE.Clock();
+  private deck = new THREE.Group();
   private bots: Bot[] = [];
+  private tiles: THREE.InstancedMesh;
+  private prints: { m: THREE.Mesh; life: number }[] = [];
+  private printAt = 0;
+  private coins: Coin[] = [];
+  private coinMesh: THREE.InstancedMesh;
+  private wave: THREE.Mesh;
+  private waveT = 9;
+  private cage = new THREE.Group();
+  private nearGate = new THREE.Group();
+  private vault = new THREE.Group();
   private wallCanvas = document.createElement("canvas");
   private wallTex: THREE.CanvasTexture;
   private wallMat: THREE.MeshBasicMaterial;
-  private amb = new THREE.HemisphereLight(0x8fb4ff, 0x0b0e14, 0.9);
-  private key = new THREE.DirectionalLight(0xffffff, 1.6);
-  private alarm = new THREE.PointLight(0xff3030, 0, 60);
-  private skyline: THREE.InstancedMesh;
+  private amb = new THREE.HemisphereLight(0x3a4c9a, 0x05060c, 0.6);
+  private key = new THREE.DirectionalLight(0xffe2c0, 1.3);
+  private alarm = new THREE.PointLight(0xff3030, 0, 70);
   private view: View | null = null;
-  private camPos = new THREE.Vector3(0, 2.5, 10.6);
-  private camLook = new THREE.Vector3(0, 3.05, 0);
-  private look = new THREE.Vector3(0, 3.05, 0);
+  private camPos = new THREE.Vector3(0, 8, 22);
+  private camLook = new THREE.Vector3(0, 1, 0);
+  private look = new THREE.Vector3(0, 1, 0);
+  private fov = 50;
   private shake = 0;
   private flash = 0;
   private flashColor = new THREE.Color();
+  private slow = 0;
+  private tilt = 0;
+  private tiltV = 0;
+  private tiltTo = 0;
+  private stageAt = 0;
   private raf = 0;
   private ray = new THREE.Raycaster();
   private disposed = false;
+  private tmp = new THREE.Object3D();
+  private col = new THREE.Color();
   ready = false;
 
   constructor(private host: HTMLElement, private colors: string[], private tags: () => (HTMLElement | null)[], private onPick: (seat: number) => void) {
@@ -60,77 +95,130 @@ export class Scene3D {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
     host.appendChild(this.renderer.domElement);
-    this.scene.background = new THREE.Color(0x05070c);
-    this.scene.fog = new THREE.Fog(0x05070c, 16, 46);
+    this.scene.background = new THREE.Color(0x05060f);
+    this.scene.fog = new THREE.FogExp2(0x070a18, 0.014);
+    const pm = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.35;
 
-    this.key.position.set(4, 10, 8);
+    this.key.position.set(7, 14, 9);
     this.key.castShadow = true;
-    this.key.shadow.mapSize.set(1024, 1024);
-    Object.assign(this.key.shadow.camera, { left: -9, right: 9, top: 8, bottom: -4, near: 1, far: 30 });
-    this.alarm.position.set(0, 6, 2);
-    this.scene.add(this.amb, this.key, this.alarm);
+    this.key.shadow.mapSize.set(2048, 2048);
+    Object.assign(this.key.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 1, far: 45 });
+    this.alarm.position.set(0, 9, 0);
+    this.scene.add(this.amb, this.key, this.alarm, this.deck);
 
-    // Floor with a glowing grid.
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshStandardMaterial({ color: 0x0a0f18, roughness: 0.35, metalness: 0.6 }));
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    const grid = new THREE.GridHelper(120, 80, 0x1f6f5b, 0x12303a);
-    grid.position.y = 0.01;
-    (grid.material as THREE.Material).transparent = true;
-    (grid.material as THREE.Material).opacity = 0.55;
-    this.scene.add(floor, grid);
+    // The deck: a slab balanced on a pivot over the pit.
+    const metal = new THREE.MeshStandardMaterial({ color: 0x0d1220, roughness: 0.32, metalness: 0.85 });
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(12.6, 0.5, 19), metal);
+    slab.position.y = -0.26;
+    slab.receiveShadow = true;
+    this.deck.add(slab);
+    const edge = new THREE.MeshBasicMaterial({ color: 0x2b6cff, toneMapped: false });
+    for (const x of [-6.34, 6.34]) { const e = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 19), edge); e.position.set(x, 0.02, 0); this.deck.add(e); }
+    for (let i = 1; i < N; i++) { const e = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.02, 18.4), new THREE.MeshBasicMaterial({ color: 0x1a2440 })); e.position.set(laneX(i) - 1, 0.011, 0); this.deck.add(e); }
+    const tile = new THREE.PlaneGeometry(1.84, 1.46).rotateX(-Math.PI / 2);
+    this.tiles = new THREE.InstancedMesh(tile, new THREE.MeshBasicMaterial({ toneMapped: false }), N * 11);
+    for (let i = 0; i < N; i++) for (let p = -5; p <= 5; p++) {
+      this.tmp.position.set(laneX(i), 0.012, -p * TILE); this.tmp.rotation.set(0, 0, 0); this.tmp.scale.setScalar(1); this.tmp.updateMatrix();
+      this.tiles.setMatrixAt(i * 11 + p + 5, this.tmp.matrix);
+      this.tiles.setColorAt(i * 11 + p + 5, this.col.set(0));
+    }
+    this.deck.add(this.tiles);
+    // Gates: LONG at the far end under the jumbotron, SHORT at the near end.
+    for (const [z, hex, text] of [[-9.6, GREEN, "LONG"], [9.6, RED, "SHORT"]] as const) {
+      const m = new THREE.MeshStandardMaterial({ color: 0x05070c, emissive: hex, emissiveIntensity: 1.6, roughness: 0.5 });
+      const gate = z > 0 ? this.nearGate : this.deck;
+      const near = z > 0, ph = near ? 1.1 : 4;
+      for (const x of [-6.1, 6.1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.3, ph, 0.3), m); post.position.set(x, ph / 2, z); gate.add(post); }
+      const top = new THREE.Mesh(new THREE.BoxGeometry(12.5, near ? 0.12 : 0.3, 0.3), m); top.position.set(0, near ? 0.06 : 4, z); gate.add(top);
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.1), label(text, "#" + new THREE.Color(hex).getHexString()));
+      if (near) { sign.rotation.x = -Math.PI / 2; sign.position.set(0, 0.03, 8.75); sign.scale.setScalar(0.8); } else sign.position.set(0, 4.85, z);
+      gate.add(sign);
+    }
+    const pivot = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 2.4, 13, 6), metal);
+    pivot.position.y = -7;
+    this.scene.add(pivot);
+    // The pit below, and pillars of old candles around it.
+    const pit = new THREE.GridHelper(260, 130, 0x2b3cff, 0x121a44);
+    pit.position.y = -13;
+    this.scene.add(pit);
+    const count = 110, sky = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ toneMapped: false }), count);
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2, r = 34 + Math.random() * 30, h = 6 + Math.random() * 26;
+      this.tmp.position.set(Math.cos(a) * r, -13 + h / 2, Math.sin(a) * r - 6); this.tmp.scale.set(1.4, h, 1.4); this.tmp.updateMatrix();
+      sky.setMatrixAt(i, this.tmp.matrix);
+      sky.setColorAt(i, this.col.set(Math.random() > 0.45 ? 0x0f6b4c : 0x7a1f2b).multiplyScalar(0.25 + Math.random() * 0.45));
+    }
+    this.scene.add(sky);
 
-    // The price wall.
+    // The jumbotron.
     this.wallCanvas.width = 1536;
-    this.wallCanvas.height = 640;
+    this.wallCanvas.height = 672;
     this.wallTex = new THREE.CanvasTexture(this.wallCanvas);
     this.wallTex.colorSpace = THREE.SRGBColorSpace;
     this.wallMat = new THREE.MeshBasicMaterial({ map: this.wallTex, toneMapped: false });
-    const wall = new THREE.Mesh(new THREE.PlaneGeometry(13.9, 5.8), this.wallMat);
-    wall.position.set(0, 5.3, -5.2);
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(14.4, 6.3, 0.3), new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.4, metalness: 0.8 }));
-    frame.position.set(0, 5.3, -5.38);
-    for (const x of [-6.6, 6.6]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.35, 2.6, 0.35), frame.material);
-      leg.position.set(x, 1.3, -5.38);
-      this.scene.add(leg);
-    }
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(22, 9.6), this.wallMat);
+    wall.position.set(0, 10.2, -13);
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(22.6, 10.2, 0.5), metal);
+    frame.position.set(0, 10.2, -13.3);
     this.scene.add(wall, frame);
 
-    // A skyline of candlesticks behind the wall.
-    const count = 90;
-    this.skyline = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ toneMapped: false }), count);
-    const m = new THREE.Object3D(), c = new THREE.Color();
-    for (let i = 0; i < count; i++) {
-      const h = 2 + Math.random() * 13, x = (i - count / 2) * 1.5 + Math.random();
-      m.position.set(x, h / 2, -16 - Math.random() * 16);
-      m.scale.set(0.8, h, 0.8);
-      m.updateMatrix();
-      this.skyline.setMatrixAt(i, m.matrix);
-      this.skyline.setColorAt(i, c.set(Math.random() > 0.45 ? 0x0f6b4c : 0x7a1f2b).multiplyScalar(0.35 + Math.random() * 0.5));
+    // The Vault: the TEE, where the insider's name and the news are sealed.
+    const cube = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 3), new THREE.MeshStandardMaterial({ color: 0x050308, roughness: 0.15, metalness: 1 }));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(cube.geometry), new THREE.LineBasicMaterial({ color: MAGENTA, toneMapped: false }));
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.7), new THREE.MeshBasicMaterial({ color: MAGENTA, toneMapped: false, wireframe: true }));
+    this.vault.add(cube, edges, core);
+    this.vault.position.copy(VAULT);
+    const tag = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 0.6), label("SEALED · TEE", "#ff8af7", 768, 110));
+    tag.position.set(VAULT.x, VAULT.y + 2.7, VAULT.z);
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 16), new THREE.MeshBasicMaterial({ color: 0x5a1a66, toneMapped: false }));
+    stem.position.set(VAULT.x, VAULT.y - 9.5, VAULT.z);
+    this.scene.add(this.vault, tag, stem);
+
+    // Effects.
+    const coin = new THREE.CylinderGeometry(0.13, 0.13, 0.04, 10);
+    this.coinMesh = new THREE.InstancedMesh(coin, new THREE.MeshStandardMaterial({ color: GOLD, emissive: GOLD, emissiveIntensity: 0.7, metalness: 1, roughness: 0.25 }), 260);
+    this.coinMesh.frustumCulled = false;
+    this.tmp.scale.setScalar(0); this.tmp.updateMatrix();
+    for (let i = 0; i < 260; i++) { this.coinMesh.setMatrixAt(i, this.tmp.matrix); this.coins.push({ p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0 }); }
+    this.wave = new THREE.Mesh(new THREE.BoxGeometry(12.4, 0.5, 0.35), new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0 }));
+    const foot = new THREE.PlaneGeometry(0.62, 0.42).rotateX(-Math.PI / 2);
+    for (let i = 0; i < 96; i++) {
+      const m = new THREE.Mesh(foot, new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0, depthWrite: false }));
+      m.visible = false; this.deck.add(m); this.prints.push({ m, life: 0 });
     }
-    this.scene.add(this.skyline);
+    for (let k = 0; k < 12; k++) {
+      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 5), new THREE.MeshBasicMaterial({ color: RED, toneMapped: false }));
+      bar.position.set(Math.cos((k / 12) * 6.283) * 1.15, 2.5, Math.sin((k / 12) * 6.283) * 1.15);
+      this.cage.add(bar);
+    }
+    this.cage.visible = false;
+    this.deck.add(this.coinMesh, this.wave, this.cage, this.nearGate);
 
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.32, 0.5, 0.9));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.6, 0.45, 0.78);
+    this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
 
     this.resize();
     new ResizeObserver(() => this.resize()).observe(host);
     this.renderer.domElement.addEventListener("click", this.click);
     this.renderer.domElement.addEventListener("pointermove", this.hover);
-    new GLTFLoader().load(`${import.meta.env.BASE_URL}robot.glb`, (g) => this.build(g.scene, g.animations));
+    this.load();
     this.loop();
   }
 
-  private build(model: THREE.Object3D, clips: THREE.AnimationClip[]) {
+  private async load() {
+    const gltf = await new GLTFLoader().loadAsync(`${import.meta.env.BASE_URL}robot.glb`);
     if (this.disposed) return;
-    const scale = 0.42;
+    const beamGeo = new THREE.CylinderGeometry(0.05, 0.05, 1, 6).rotateX(Math.PI / 2);
     for (let i = 0; i < N; i++) {
-      const root = new THREE.Group(), body = cloneSkinned(model), p = seatPos(i), col = new THREE.Color(this.colors[i]);
-      body.scale.setScalar(scale);
+      const root = new THREE.Group(), body = cloneSkinned(gltf.scene), col = new THREE.Color(this.colors[i]);
+      body.scale.setScalar(0.45);
       let main!: THREE.MeshStandardMaterial, face: THREE.Mesh | undefined;
       body.traverse((o) => {
         const mesh = o as THREE.Mesh;
@@ -141,37 +229,25 @@ export class Scene3D {
         if (mesh.morphTargetDictionary) face = mesh;
       });
       root.add(body);
-      root.position.copy(p);
-      root.rotation.y = -(i - 2.5) * 0.13;
+      root.position.set(laneX(i), 0, 0);
+      root.rotation.y = Math.PI;
       root.userData.seat = i;
-
-      // Desk with a glowing top and a position meter.
-      const desk = new THREE.MeshStandardMaterial({ color: col.clone().multiplyScalar(0.22), emissive: col, emissiveIntensity: 0.08, roughness: 0.4, metalness: 0.5 });
-      const console_ = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 0.5), desk);
-      console_.position.set(0, 0.45, 1.05);
-      console_.castShadow = true;
-      root.add(console_);
-      const bars: THREE.Mesh[] = [];
-      for (let k = 0; k < 10; k++) {
-        const bar = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.16, 0.04), new THREE.MeshBasicMaterial({ color: 0x1c2333, toneMapped: false }));
-        bar.position.set((k - 4.5) * 0.13 + (k > 4 ? 0.03 : -0.03), 0.62, 1.31);
-        root.add(bar);
-        bars.push(bar);
-      }
-      const ring = new THREE.Mesh(new THREE.RingGeometry(0.95, 1.1, 48), new THREE.MeshBasicMaterial({ color: col, toneMapped: false, transparent: true, opacity: 0 }));
-      ring.rotation.x = -Math.PI / 2;
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.78, 0.92, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: col, toneMapped: false, transparent: true, opacity: 0 }));
       ring.position.y = 0.03;
-      root.add(ring);
-      const spot = new THREE.SpotLight(col, 0, 14, 0.42, 0.6, 1.2);
-      spot.position.set(p.x, 7, p.z + 2.2);
+      const pulse = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.58, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0 }));
+      pulse.position.y = 0.035;
+      root.add(ring, pulse);
+      const spot = new THREE.SpotLight(0xffffff, 0, 22, 0.3, 0.6, 1.1);
       spot.target = root;
-      this.scene.add(root, spot);
-
+      const beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0 }));
+      beam.frustumCulled = false;
+      this.deck.add(root);
+      this.scene.add(spot, beam);
       const mixer = new THREE.AnimationMixer(body), actions: Record<string, THREE.AnimationAction> = {};
-      for (const clip of clips) actions[clip.name] = mixer.clipAction(clip);
+      for (const clip of gltf.animations) actions[clip.name] = mixer.clipAction(clip);
       actions.Idle.time = Math.random() * 2;
       actions.Idle.play();
-      const bot: Bot = { root, mixer, actions, current: "Idle", main, face, desk, ring, spot, bars, hold: false };
+      const bot: Bot = { root, body, mixer, actions, current: "Idle", main, face, ring, pulse, spot, beam, hold: false, moving: false, down: 0, yaw: Math.PI, trail: 0 };
       mixer.addEventListener("finished", () => { if (!bot.hold) this.play(bot, "Idle"); });
       this.bots.push(bot);
     }
@@ -186,7 +262,7 @@ export class Scene3D {
     next.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, once ? 1 : Infinity);
     next.clampWhenFinished = hold;
     b.hold = hold;
-    if (prev !== next) next.crossFadeFrom(prev, 0.2, false);
+    if (prev !== next) next.crossFadeFrom(prev, 0.15, false);
     next.play();
     b.current = name;
   }
@@ -197,25 +273,52 @@ export class Scene3D {
     for (const k of Object.keys(d)) inf[d[k]] = k === name ? 1 : 0;
   }
 
-  /// A trader buys (cheers) or sells (slams).
+  private lined(stage: Stage) { return stage === "vote" || stage === "drum" || stage === "reveal"; }
+  /// Where a robot should stand, in deck space.
+  private spot(i: number, v: View) {
+    return this.lined(v.stage) ? new THREE.Vector3(laneX(i) * 0.92, 0, 6.6 + Math.abs(i - 2.5) * 0.25) : new THREE.Vector3(laneX(i), 0, -v.seats[i].pos * TILE);
+  }
+
+  /// A trade landed: ring the tile under the robot.
   trade(seat: number, delta: number) {
     const b = this.bots[seat];
     if (!b || this.view?.stage !== "live") return;
-    this.play(b, delta > 0 ? "ThumbsUp" : "Punch", true);
-    b.desk.emissive.set(delta > 0 ? 0x3ddc97 : 0xff6b6b);
-    b.desk.emissiveIntensity = 1.6;
+    const m = b.pulse.material as THREE.MeshBasicMaterial;
+    m.color.set(delta > 0 ? GREEN : RED);
+    m.opacity = 1;
+    b.pulse.scale.setScalar(1);
   }
 
-  /// A news shock hits the floor.
+  /// News hits: the deck lurches, robots on the wrong side are thrown, the right side cashes in.
   news(bps: number) {
-    this.shake = 0.5;
-    this.flash = 1;
-    this.flashColor.set(bps > 0 ? 0x3ddc97 : 0xff4d4d);
+    const v = this.view;
+    this.shake = 0.6; this.flash = 1; this.slow = 0.4; this.waveT = 0; this.tiltV += bps > 0 ? 1.6 : -1.6;
+    this.flashColor.set(bps > 0 ? GREEN : RED);
+    (this.wave.material as THREE.MeshBasicMaterial).color.copy(this.flashColor);
+    if (!v) return;
     this.bots.forEach((b, i) => {
-      if (this.view?.seats[i]?.empty) return;
-      const helped = Math.sign(this.view!.seats[i].pos) === Math.sign(bps);
-      setTimeout(() => { this.play(b, this.view!.seats[i].pos === 0 ? "Jump" : helped ? "Yes" : "No", true); this.express(b, helped ? null : "Surprised"); }, i * 60);
+      const s = v.seats[i];
+      if (s.empty) return;
+      const side = Math.sign(s.pos) * Math.sign(bps), lots = Math.abs(s.pos);
+      if (side > 0) {
+        this.play(b, lots >= 3 ? "ThumbsUp" : "Jump", true); this.express(b, null);
+        this.fountain(b.root.position, lots * 7);
+      } else if (side < 0 && lots >= 4) {
+        this.play(b, "Death", true, true); this.express(b, "Surprised"); b.down = 1.3;
+      } else if (side < 0) { this.play(b, "No", true); this.express(b, "Sad"); }
+      else this.play(b, "Jump", true);
     });
+  }
+
+  private fountain(at: THREE.Vector3, n: number) {
+    for (const c of this.coins) {
+      if (n <= 0) break;
+      if (c.life > 0) continue;
+      c.p.set(at.x, 1.7, at.z);
+      c.v.set((Math.random() - 0.5) * 3.2, 5 + Math.random() * 4, (Math.random() - 0.5) * 3.2);
+      c.life = 1.6 + Math.random() * 0.5;
+      n--;
+    }
   }
 
   set(v: View) {
@@ -223,32 +326,30 @@ export class Scene3D {
     this.view = v;
     if (!this.ready) return;
     const changed = prev?.stage !== v.stage;
+    if (changed) this.stageAt = this.clock.elapsedTime;
+    this.tiltTo = v.stage === "live" ? THREE.MathUtils.clamp((v.wall.shocks.reduce((a, s) => a + s.bps, 0) / 250) * 2.2, -7, 7) * (Math.PI / 180) : 0;
+    this.nearGate.visible = !this.lined(v.stage);
+    this.cage.visible = v.stage === "reveal" && v.caught && !!this.bots[v.insider];
     this.bots.forEach((b, i) => {
-      const s = v.seats[i];
-      b.root.visible = true;
-      b.root.children[0].visible = !s.empty;
-      const col = new THREE.Color(this.colors[i]);
-      b.bars.forEach((bar, k) => {
-        const lvl = k < 5 ? k - 5 : k - 4, on = !s.empty && ((lvl > 0 && s.pos >= lvl) || (lvl < 0 && s.pos <= lvl));
-        (bar.material as THREE.MeshBasicMaterial).color.set(on ? (lvl > 0 ? 0x3ddc97 : 0xff6b6b) : 0x1c2333);
-      });
-      (b.ring.material as THREE.MeshBasicMaterial).opacity = i === v.me ? 0.9 : 0;
-      (b.ring.material as THREE.MeshBasicMaterial).color.set(i === v.me && v.insiderMe ? 0xf5b83d : col);
+      const s = v.seats[i], col = this.col.set(this.colors[i]);
+      b.body.visible = !s.empty;
+      (b.ring.material as THREE.MeshBasicMaterial).opacity = i === v.me ? 0.95 : 0;
+      (b.ring.material as THREE.MeshBasicMaterial).color.set(i === v.me && v.insiderMe ? MAGENTA : col);
       if (changed || prev?.seats[i].empty !== s.empty) {
         b.main.color.copy(col);
         b.main.emissive.set(0);
+        b.down = 0;
         this.express(b, null);
-        if (v.stage === "idle") this.play(b, "Idle");
+        if (!b.moving) this.play(b, "Idle");
         if (v.stage === "deal") this.play(b, "Standing", true);
-        if (v.stage === "live") this.play(b, "Idle");
-        if (v.stage === "vote") this.play(b, "Idle");
-        if (v.stage === "drum") { this.play(b, "Idle"); this.express(b, "Surprised"); }
+        if (v.stage === "drum") this.express(b, "Surprised");
         if (v.stage === "reveal") {
           if (i === v.insider) {
-            b.main.color.set(0x15171c);
-            b.main.emissive.set(v.caught ? 0x550000 : 0x4a3500);
+            b.main.color.set(0x14060f);
+            b.main.emissive.set(MAGENTA).multiplyScalar(0.55);
             this.express(b, v.caught ? "Sad" : "Angry");
             v.caught ? this.play(b, "Death", true, true) : this.play(b, "Dance");
+            if (v.caught) this.cage.position.set(b.root.position.x, 6, b.root.position.z); else this.fountain(b.root.position, 60);
           } else {
             this.express(b, v.caught ? null : "Sad");
             setTimeout(() => this.view?.stage === "reveal" && this.play(b, v.caught ? "Jump" : "No", true), 300 + i * 90);
@@ -256,11 +357,6 @@ export class Scene3D {
         }
       } else if (v.stage === "live" && b.current === "Idle") this.express(b, s.mood < 0 ? "Sad" : null);
     });
-    // Camera and lighting per stage.
-    const a = Math.max(1, 1.55 / this.camera.aspect);
-    if (v.stage === "vote" || v.stage === "drum") { this.camPos.set(0, 2.2, 8.6 * a); this.camLook.set(0, 1.5, 0); }
-    else if (v.stage === "reveal" && this.bots[v.insider]) { const p = seatPos(v.insider); this.camPos.set(p.x * 0.75, 1.9, p.z + 5.2 * a); this.camLook.set(p.x, 1.25, p.z); }
-    else { this.camPos.set(0, 2.5, 10.6 * a); this.camLook.set(0, 3.05, 0); }
     this.drawWall(v.wall);
   }
 
@@ -352,15 +448,17 @@ export class Scene3D {
   private pick(e: PointerEvent | MouseEvent): number {
     const r = this.renderer.domElement.getBoundingClientRect();
     this.ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), this.camera);
-    const hit = this.ray.intersectObjects(this.bots.map((b) => b.root), true)[0];
+    const hit = this.ray.intersectObjects(this.bots.map((b) => b.body), true)[0];
     let o: THREE.Object3D | null = hit?.object ?? null;
     while (o && o.userData.seat === undefined) o = o.parent;
     return o ? (o.userData.seat as number) : -1;
   }
+  private hot = -1;
   private click = (e: MouseEvent) => { const s = this.pick(e); if (s >= 0 && this.view?.stage === "vote" && s !== this.view.me && !this.view.seats[s].empty) this.onPick(s); };
   private hover = (e: PointerEvent) => {
     const s = this.view?.stage === "vote" ? this.pick(e) : -1;
-    this.renderer.domElement.style.cursor = s >= 0 && s !== this.view!.me ? "pointer" : "";
+    this.hot = s >= 0 && s !== this.view!.me ? s : -1;
+    this.renderer.domElement.style.cursor = this.hot >= 0 ? "pointer" : "";
   };
 
   private resize() {
@@ -369,50 +467,162 @@ export class Scene3D {
     this.composer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    if (this.view) this.set(this.view);
+  }
+
+  /// Camera per stage. `a` pulls back on narrow screens so all six lanes stay in frame.
+  private direct(v: View | null, t: number) {
+    const a = Math.max(1, 1.5 / this.camera.aspect), stage = v?.stage ?? "idle";
+    const meX = v && v.me >= 0 ? laneX(v.me) : 0, me = v && v.me >= 0 ? this.bots[v.me] : undefined;
+    let fov = 50;
+    if (stage === "live") {
+      const last = v!.wall.elapsed >= 50, z = me ? me.root.position.z * 0.15 : 0;
+      if (last) { this.camPos.set(meX * 0.5, 5.6, 14 * a + z); this.camLook.set(0, 4, -3.5); fov = 56; }
+      else { this.camPos.set(meX * 0.5, 7.4, 15.2 * a + z); this.camLook.set(meX * 0.3, 4.3, -4); }
+    } else if (stage === "deal" && me) { this.camPos.set(meX + 1.6, 2.1, -4.6 * a); this.camLook.set(meX, 1.5, 0); }
+    else if (stage === "vote" || stage === "drum") { this.camPos.set(this.hot >= 0 ? laneX(this.hot) * 0.12 : 0, 2.7, 16.6 * a); this.camLook.set(0, 1.55, 6.6); }
+    else if (stage === "reveal" && this.bots[v!.insider]) {
+      const p = this.bots[v!.insider].root.position, k = Math.min(1, (t - this.stageAt) / 1.5);
+      this.camPos.set(p.x * 0.8, 2.3, p.z + (7.5 - 3.4 * k) * a); this.camLook.set(p.x, 1.3, p.z);
+    } else { this.camPos.set(Math.sin(t * 0.05) * 22 * a, 8, Math.cos(t * 0.05) * 22 * a); this.camLook.set(0, 2, -3); }
+    this.fov += ((this.flash > 0.75 ? fov - 6 : fov) - this.fov) * 0.12;
   }
 
   private loop = () => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.loop);
-    const dt = Math.min(this.clock.getDelta(), 0.05), t = this.clock.elapsedTime, v = this.view;
-    const stage = v?.stage ?? "idle";
-    const k = 1 - Math.exp(-dt * 2.6);
+    const raw = Math.min(this.clock.getDelta(), 0.05), t = this.clock.elapsedTime, v = this.view;
+    this.slow = Math.max(0, this.slow - raw);
+    const dt = raw * (this.slow > 0 ? 0.3 : 1);
+    const stage = v?.stage ?? "idle", dark = this.lined(stage), last = stage === "live" && v!.wall.elapsed >= 50;
+
+    this.direct(v, t);
+    const k = 1 - Math.exp(-raw * (stage === "idle" ? 1.2 : 3));
     this.camera.position.lerp(this.camPos, k);
     this.look.lerp(this.camLook, k);
-    this.camera.position.x += Math.sin(t * 0.25) * 0.004;
     if (this.shake > 0) {
-      this.shake = Math.max(0, this.shake - dt);
-      this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
-      this.camera.position.y += (Math.random() - 0.5) * this.shake * 0.5;
+      this.shake = Math.max(0, this.shake - raw);
+      this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.6;
+      this.camera.position.y += (Math.random() - 0.5) * this.shake * 0.6;
     }
     this.camera.lookAt(this.look);
-    this.flash = Math.max(0, this.flash - dt * 0.9);
-    const dark = stage === "vote" || stage === "drum" || stage === "reveal";
-    this.amb.intensity += ((dark ? 0.18 : 0.9) - this.amb.intensity) * k;
-    this.key.intensity += ((dark ? 0.25 : 1.6) - this.key.intensity) * k;
-    this.alarm.color.copy(this.flash > 0 ? this.flashColor : new THREE.Color(0xff3030));
-    this.alarm.intensity = this.flash * 260 + (stage === "drum" ? (Math.sin(t * 14) > 0 ? 90 : 0) : 0);
-    this.wallMat.color.setScalar(dark ? 0.45 : 1).lerp(this.flashColor, this.flash * 0.5);
+    if (Math.abs(this.camera.fov - this.fov) > 0.01) { this.camera.fov = this.fov; this.camera.updateProjectionMatrix(); }
+
+    // The deck is a spring: news kicks it, then it settles at the tilt the shocks have earned.
+    this.tiltV += ((this.tiltTo - this.tilt) * 120 - this.tiltV * 9) * raw;
+    this.tilt += this.tiltV * raw;
+    this.deck.rotation.x = this.tilt;
+
+    this.flash = Math.max(0, this.flash - raw * 0.9);
+    this.amb.intensity += ((dark ? 0.1 : 0.6) - this.amb.intensity) * k;
+    this.key.intensity += ((dark ? 0.06 : last ? 0.7 : 1.3) - this.key.intensity) * k;
+    const beat = last ? Math.max(0, 1 - ((v!.wall.elapsed % 1) * 3)) : 0;
+    this.alarm.color.set(0xff3030);
+    if (this.flash > 0) this.alarm.color.copy(this.flashColor);
+    this.alarm.intensity = this.flash * 420 + beat * 160 + (stage === "drum" ? (Math.sin(t * 14) > 0 ? 120 : 0) : 0);
+    this.wallMat.color.setScalar(dark ? 0.35 : 1).lerp(this.flashColor, this.flash * 0.5);
+    this.bloom.strength = 0.6 + this.flash * 0.5 + (stage === "reveal" ? 0.25 : 0);
+    this.vault.rotation.y += raw * (stage === "deal" ? 5 : 0.25);
+    this.vault.children[2].rotation.x += raw * 1.5;
+
+    // Tiles: a green ramp toward LONG, red toward SHORT; the tile a robot stands on takes its colour.
+    const tip = v?.insiderMe && stage === "live" ? v.wall.future.find((s) => s.at - v.wall.elapsed > 0 && s.at - v.wall.elapsed < 6) : undefined;
+    for (let i = 0; i < N; i++) for (let p = -5; p <= 5; p++) {
+      const s = v?.seats[i], on = s && !s.empty && s.pos === p && !dark;
+      if (on) this.col.set(this.colors[i]).multiplyScalar(0.95);
+      else if (p === 0) this.col.setScalar(dark ? 0.02 : 0.11);
+      else this.col.set(p > 0 ? GREEN : RED).multiplyScalar(dark ? 0.012 : 0.07 + Math.abs(p) * 0.03 + this.flash * 0.22 + beat * 0.04);
+      if (tip && i === v!.me && Math.sign(p) === Math.sign(tip.bps) && !on) this.col.lerp(new THREE.Color(MAGENTA), 0.25 + 0.25 * Math.sin(t * 9));
+      this.tiles.setColorAt(i * 11 + p + 5, this.col);
+    }
+    this.tiles.instanceColor!.needsUpdate = true;
+
     this.bots.forEach((b, i) => {
       b.mixer.update(dt);
-      b.desk.emissive.lerp(new THREE.Color(this.colors[i]), dt * 3);
-      b.desk.emissiveIntensity += (0.08 - b.desk.emissiveIntensity) * dt * 3;
-      const lit = stage === "vote" ? 60 : stage === "drum" ? (Math.floor(t * 9) % N === i ? 120 : 6) : stage === "reveal" ? (i === v!.insider ? 160 : 4) : 0;
-      b.spot.intensity += (lit - b.spot.intensity) * Math.min(1, dt * 8);
-      if (stage === "reveal" && i === v!.insider) b.spot.color.set(v!.caught ? 0xff3b3b : 0xf5b83d); else b.spot.color.set(this.colors[i]);
-      (b.ring.material as THREE.MeshBasicMaterial).opacity *= i === v?.me ? 1 : 0;
-      b.ring.scale.setScalar(1 + Math.sin(t * 3) * 0.04);
-      // Pin the HTML tag above the trader's head.
+      const s = v?.seats[i];
+      b.down = Math.max(0, b.down - dt);
+      if (b.down === 0 && b.current === "Death" && stage === "live") { this.play(b, "Idle"); this.express(b, "Sad"); }
+      // Walk to where the chain says this robot stands.
+      if (v && s && !s.empty && b.down === 0 && !(stage === "reveal" && i === v.insider)) {
+        const to = this.spot(i, v), d = to.sub(b.root.position), len = d.length();
+        if (len > 0.04) {
+          const step = Math.min(len, (dark ? 5 : 7.5) * dt);
+          b.root.position.addScaledVector(d, step / len);
+          b.yaw = Math.atan2(d.x, d.z);
+          b.trail += step;
+          if (stage === "live" && b.trail > 0.75) { b.trail = 0; this.print(b.root.position, i); }
+          if (!b.moving) { b.moving = true; this.play(b, dark ? "Walking" : "Running"); }
+        } else if (b.moving) { b.moving = false; this.play(b, "Idle"); }
+        if (!b.moving) b.yaw = dark ? 0 : Math.PI;
+      }
+      let dy = b.yaw - b.root.rotation.y;
+      dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+      b.root.rotation.y += dy * Math.min(1, raw * 14);
+
+      const pm = b.pulse.material as THREE.MeshBasicMaterial;
+      if (pm.opacity > 0) { pm.opacity = Math.max(0, pm.opacity - raw * 2.2); b.pulse.scale.multiplyScalar(1 + raw * 4); }
+      b.ring.scale.setScalar(1 + Math.sin(t * 3) * 0.05);
+
+      const world = b.root.getWorldPosition(new THREE.Vector3());
+      const lit = s?.empty ? 0 : stage === "vote" ? (this.hot === i ? 90 : 45) : stage === "drum" ? (Math.floor(t * 9) % N === i ? 90 : 3) : stage === "reveal" ? (i === v!.insider ? 110 : 0) : 0;
+      b.spot.position.set(world.x, 11, world.z + 3);
+      b.spot.intensity += (lit - b.spot.intensity) * Math.min(1, raw * 8);
+      b.spot.color.set(stage === "reveal" && i === v!.insider ? MAGENTA : 0xffffff);
+
+      // The deal: a beam from the Vault to every robot. Only yours is coloured, and only you see it.
+      const bm = b.beam.material as THREE.MeshBasicMaterial, show = stage === "deal" && !s?.empty;
+      bm.opacity += ((show ? 0.9 : 0) - bm.opacity) * Math.min(1, raw * 6);
+      b.beam.visible = bm.opacity > 0.02;
+      if (b.beam.visible) {
+        const head = world.clone().setY(world.y + 1.9), len = head.distanceTo(VAULT);
+        b.beam.position.copy(VAULT).lerp(head, 0.5);
+        b.beam.lookAt(head);
+        b.beam.scale.set(1, 1, len);
+        bm.color.set(i === v!.me ? (v!.insiderMe ? MAGENTA : 0xffffff) : 0x4a5a9a);
+      }
+
       const el = this.tags()[i];
       if (el) {
-        const p = b.root.position.clone().setY(2.2).project(this.camera);
+        const p = world.setY(world.y + 2.25).project(this.camera);
         el.style.transform = `translate(-50%,-100%) translate(${((p.x + 1) / 2) * this.host.clientWidth}px,${((1 - p.y) / 2) * this.host.clientHeight}px)`;
         el.style.opacity = p.z < 1 ? "1" : "0";
       }
     });
+
+    // Footprints fade over ten seconds.
+    for (const f of this.prints) {
+      if (f.life <= 0) continue;
+      f.life -= dt / 10;
+      (f.m.material as THREE.MeshBasicMaterial).opacity = Math.max(0, f.life) * 0.8;
+      if (f.life <= 0 || stage !== "live") { f.life = 0; f.m.visible = false; }
+    }
+    // Coins.
+    this.coins.forEach((c, i) => {
+      if (c.life <= 0) return;
+      c.life -= dt;
+      c.v.y -= 14 * dt;
+      c.p.addScaledVector(c.v, dt);
+      if (c.p.y < 0.05 && c.v.y < 0) { c.p.y = 0.05; c.v.y *= -0.4; c.v.x *= 0.6; c.v.z *= 0.6; }
+      this.tmp.position.copy(c.p); this.tmp.rotation.set(t * 9 + i, i, t * 7); this.tmp.scale.setScalar(c.life > 0 ? Math.min(1, c.life * 3) : 0); this.tmp.updateMatrix();
+      this.coinMesh.setMatrixAt(i, this.tmp.matrix);
+    });
+    this.coinMesh.instanceMatrix.needsUpdate = true;
+    // Shockwave down the lanes.
+    this.waveT += raw;
+    const wm = this.wave.material as THREE.MeshBasicMaterial;
+    wm.opacity = this.waveT < 0.55 ? 0.9 * (1 - this.waveT / 0.55) : 0;
+    this.wave.position.set(0, 0.25, -9 + (this.waveT / 0.55) * 18);
+    if (this.cage.visible) { this.cage.position.y = Math.max(0, this.cage.position.y - raw * 14); this.cage.rotation.y += raw * 0.6; }
+
     this.composer.render();
   };
+
+  private print(at: THREE.Vector3, seat: number) {
+    const f = this.prints[this.printAt = (this.printAt + 1) % this.prints.length];
+    f.life = 1;
+    f.m.visible = true;
+    f.m.position.set(at.x + (this.printAt % 2 ? 0.22 : -0.22), 0.02, at.z);
+    (f.m.material as THREE.MeshBasicMaterial).color.set(this.colors[seat]);
+  }
 
   dispose() {
     this.disposed = true;
