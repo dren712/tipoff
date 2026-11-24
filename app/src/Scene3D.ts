@@ -17,7 +17,7 @@ export type Wall = {
   future: { at: number; bps: number }[];
   title: string; sub: string;
 };
-export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boolean; insider: number; caught: boolean; wall: Wall };
+export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boolean; insider: number; caught: boolean; canVote?: boolean; wall: Wall };
 
 const N = 6, TILE = 1.6, GREEN = 0x3ddc97, RED = 0xff5c6c, MAGENTA = 0xff3df0, GOLD = 0xf5b83d;
 const laneX = (i: number) => (i - 2.5) * 2;
@@ -192,11 +192,15 @@ export class Scene3D {
       const m = new THREE.Mesh(foot, new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0, depthWrite: false }));
       m.visible = false; this.deck.add(m); this.prints.push({ m, life: 0 });
     }
+    const cageMat = new THREE.MeshBasicMaterial({ color: RED, toneMapped: false });
     for (let k = 0; k < 12; k++) {
-      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 5), new THREE.MeshBasicMaterial({ color: RED, toneMapped: false }));
-      bar.position.set(Math.cos((k / 12) * 6.283) * 1.15, 2.5, Math.sin((k / 12) * 6.283) * 1.15);
+      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.3), cageMat);
+      bar.position.set(Math.cos((k / 12) * 6.283) * 1.15, 1.15, Math.sin((k / 12) * 6.283) * 1.15);
       this.cage.add(bar);
     }
+    const cageCap = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.035, 8, 24).rotateX(Math.PI / 2), cageMat);
+    cageCap.position.y = 2.3;
+    this.cage.add(cageCap);
     this.cage.visible = false;
     this.deck.add(this.coinMesh, this.wave, this.cage, this.nearGate);
 
@@ -277,6 +281,7 @@ export class Scene3D {
   private lined(stage: Stage) { return stage === "vote" || stage === "drum" || stage === "reveal"; }
   /// Where a robot should stand, in deck space.
   private spot(i: number, v: View) {
+    if (v.stage === "reveal" && i !== v.insider) return new THREE.Vector3(laneX(i) * 1.15, 0, 2.5);
     return this.lined(v.stage) ? new THREE.Vector3(laneX(i) * 0.92, 0, 6.6 + Math.abs(i - 2.5) * 0.25) : new THREE.Vector3(laneX(i), 0, -v.seats[i].pos * TILE);
   }
 
@@ -325,6 +330,7 @@ export class Scene3D {
   set(v: View) {
     const prev = this.view;
     this.view = v;
+    if (v.stage !== "vote" || v.canVote === false) { this.hot = -1; this.renderer.domElement.style.cursor = ""; }
     if (!this.ready) return;
     const changed = prev?.stage !== v.stage;
     if (changed) this.stageAt = this.clock.elapsedTime;
@@ -435,10 +441,10 @@ export class Scene3D {
   private spent = 0;
   /// Renderer facts for the proof panel and QA.
   stats() { const i = this.renderer.info; return { quality: this.quality, calls: i.render.calls, triangles: i.render.triangles, ratio: this.renderer.getPixelRatio() }; }
-  private click = (e: MouseEvent) => { const s = this.pick(e); if (s >= 0 && this.view?.stage === "vote" && s !== this.view.me && !this.view.seats[s].empty) this.onPick(s); };
+  private click = (e: MouseEvent) => { const s = this.pick(e); if (s >= 0 && this.view?.stage === "vote" && this.view.canVote !== false && s !== this.view.me && !this.view.seats[s].empty) this.onPick(s); };
   private hover = (e: PointerEvent) => {
-    const s = this.view?.stage === "vote" ? this.pick(e) : -1;
-    this.hot = s >= 0 && s !== this.view!.me ? s : -1;
+    const s = this.view?.stage === "vote" && this.view.canVote !== false ? this.pick(e) : -1;
+    this.hot = s >= 0 && s !== this.view!.me && !this.view!.seats[s].empty ? s : -1;
     this.renderer.domElement.style.cursor = this.hot >= 0 ? "pointer" : "";
   };
 
@@ -450,21 +456,37 @@ export class Scene3D {
     this.camera.updateProjectionMatrix();
   }
 
-  /// Camera per stage. `a` pulls back on narrow screens so all six lanes stay in frame.
+  /// Camera per stage. Adapts distance and framing so all lanes fit on narrow screens and reveals stay centred.
   private direct(v: View | null, t: number) {
-    const a = Math.max(1, 1.5 / this.camera.aspect), stage = v?.stage ?? "idle";
+    const aspect = this.camera.aspect || 1, a = Math.max(1, 1.5 / aspect), portrait = aspect < 1.25, stage = v?.stage ?? "idle";
     const meX = v && v.me >= 0 ? laneX(v.me) : 0, me = v && v.me >= 0 ? this.bots[v.me] : undefined;
     let fov = 50;
     if (this.orbit) { this.camPos.set(Math.sin(t * 0.08) * 20 * a, 7.5, Math.cos(t * 0.08) * 20 * a); this.camLook.set(0, 2.5, -2); }
     else if (stage === "live") {
-      const last = v!.wall.elapsed >= 50, z = me ? me.root.position.z * 0.15 : 0;
-      if (last) { this.camPos.set(meX * 0.4, 11, 21 * a + z); this.camLook.set(0, 1.2, 0.8); fov = 56; }
-      else { this.camPos.set(meX * 0.4, 13, 22.5 * a + z); this.camLook.set(meX * 0.25, 1.2, 0.8); }
+      const last = v!.wall.elapsed >= 50, z = me ? Math.max(0, me.root.position.z) * 0.12 : 0;
+      if (portrait) {
+        this.camPos.set(0, last ? 10.2 : 10.6, Math.max(19.4, 7.0 / Math.max(0.5, aspect) + 12.6) + z * 0.6);
+        this.camLook.set(0, 2.0, -0.5);
+        fov = last ? 60 : 58;
+      } else if (last) {
+        this.camPos.set(meX * 0.35, 12.2, 25.0 * a + z);
+        this.camLook.set(0, 1.4, 0.5);
+        fov = 56;
+      } else {
+        this.camPos.set(meX * 0.35, 13.2, 26.5 * a + z);
+        this.camLook.set(meX * 0.2, 1.5, 0.5);
+        fov = 52;
+      }
     } else if (stage === "deal" && me) { this.camPos.set(meX + 1.6, 2.1, -4.6 * a); this.camLook.set(meX, 1.5, 0); }
-    else if (stage === "vote" || stage === "drum") { this.camPos.set(this.hot >= 0 ? laneX(this.hot) * 0.12 : 0, 2.7, 16.6 * a); this.camLook.set(0, 1.55, 6.6); }
-    else if (stage === "reveal" && this.bots[v!.insider]) {
+    else if (stage === "vote" || stage === "drum") {
+      const minDz = 6.3 / (Math.tan((fov * Math.PI) / 360) * aspect);
+      this.camPos.set(this.hot >= 0 ? laneX(this.hot) * 0.12 : 0, portrait ? 3.05 : 2.7, 7.225 + Math.max(9.4, minDz));
+      this.camLook.set(0, 1.55, 6.6);
+    } else if (stage === "reveal" && this.bots[v!.insider]) {
       const p = this.bots[v!.insider].root.position, k = Math.min(1, (t - this.stageAt) / 1.5);
-      this.camPos.set(p.x * 0.8, 2.6, p.z + (9 - 2.5 * k) * a); this.camLook.set(p.x, 2.9, p.z);
+      const back = portrait ? Math.max(8.2, 6.4 / Math.max(0.55, aspect)) - 0.8 * k : 9.0 - 1.4 * k;
+      this.camPos.set(p.x, portrait ? 3.5 : 3.8, p.z + back);
+      this.camLook.set(p.x, portrait ? 0.9 : 1.1, p.z);
     } else { this.camPos.set(Math.sin(t * 0.2) * 2.5, 6.2, 15 * a); this.camLook.set(0, 3.6, -4); }
     this.fov += ((this.flash > 0.75 ? fov - 6 : fov) - this.fov) * 0.12;
   }
@@ -472,6 +494,8 @@ export class Scene3D {
   private loop = () => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.loop);
+    const cw = this.host.clientWidth, ch = this.host.clientHeight;
+    if (cw > 0 && ch > 0 && Math.abs(this.camera.aspect - cw / ch) > 0.01) this.resize();
     const real = Math.min(this.clock.getDelta(), 0.5), raw = Math.min(real, 0.1), t = this.clock.elapsedTime, v = this.view;
     this.slow = Math.max(0, this.slow - raw);
     const dt = raw * (this.slow > 0 ? 0.3 : 1);
@@ -519,6 +543,7 @@ export class Scene3D {
     this.tiles.instanceColor!.needsUpdate = true;
 
     let chosen = -1;
+    const tagRects: { x: number; y: number; hw: number; h: number }[] = [];
     this.bots.forEach((b, i) => {
       b.mixer.update(dt);
       const s = v?.seats[i];
@@ -563,9 +588,27 @@ export class Scene3D {
 
       const el = this.tags()[i];
       if (el) {
-        const p = world.setY(world.y + 2.25).project(this.camera);
-        el.style.transform = `translate(-50%,-100%) translate(${((p.x + 1) / 2) * this.host.clientWidth}px,${((1 - p.y) / 2) * this.host.clientHeight}px)`;
-        el.style.opacity = p.z < 1 && stage !== "reveal" ? "1" : "0";
+        const w = this.host.clientWidth || 1, h = this.host.clientHeight || 1;
+        const narrow = w < 700;
+        const yOff = narrow && (stage === "live" || stage === "vote") && i % 2 === 1 ? 2.55 : 2.25;
+        const p = world.setY(world.y + yOff).project(this.camera);
+        const vis = p.z < 1 && stage !== "reveal";
+        el.style.opacity = vis ? "1" : "0";
+        if (vis) {
+          const hw = Math.max(18, (el.offsetWidth || 48) / 2);
+          const th = el.offsetHeight || 26;
+          let px = THREE.MathUtils.clamp(((p.x + 1) / 2) * w, hw + 4, w - hw - 4);
+          let py = ((1 - p.y) / 2) * h;
+          if (narrow && i % 2 === 1) py -= th + 2;
+          for (const r of [...tagRects].sort((a, b) => b.y - a.y)) {
+            if (Math.abs(px - r.x) < hw + r.hw + 4 && py > r.y - r.h - 4 && py - th < r.y + 4) {
+              py = r.y - r.h - 4;
+            }
+          }
+          py = THREE.MathUtils.clamp(py, th + 4, h - 4);
+          tagRects.push({ x: px, y: py, hw, h: th });
+          el.style.transform = `translate(-50%,-100%) translate(${px.toFixed(1)}px,${py.toFixed(1)}px)`;
+        }
       }
     });
 
