@@ -30,9 +30,11 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
   const [flash, setFlash] = useState<{ id: number; bps: number } | null>(null);
   const [roleCard, setRoleCard] = useState<{ round: string; insider: boolean } | null>(null);
   const [stage, setStage] = useState(2); // reveal: 0 drum roll, 1 unmask, 2 scores
+  const [voted, setVoted] = useState<{ round: string; suspect: number } | null>(null);
   const [muted, setMute] = useState(isMuted());
   const hist = useRef<Hist>({ round: "", points: [], marks: [], seen: 0, shocks: 0, phase: -1 });
   const shownRole = useRef("");
+  const voteLock = useRef("");
   const me = session.kp.publicKey;
   const mySeatRef = useRef(-1);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -106,13 +108,14 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
     return () => { live = false; clearInterval(id); };
   }, [session, key, mySeat, round, phase]);
 
-  const run = useCallback(async (label: string, fn: () => Promise<{ sig: string; ms: number }>) => {
+  const run = useCallback(async (label: string, fn: () => Promise<{ sig: string; ms: number }>, onFail?: () => void) => {
     setBusy(true);
     try {
       const r = await fn();
       onLatency(r.ms);
       setToast(`${label} · ${r.ms} ms`);
     } catch (e: any) {
+      onFail?.();
       setToast(`${label} failed: ${e?.message ?? e}`);
     } finally {
       setBusy(false);
@@ -129,9 +132,28 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
   const seat = t && mySeat >= 0 ? t.seats[mySeat] : null;
   const current = priv && t && priv.round.eq(t.round) ? priv : null;
   const insider = current?.role === 2 && phase === 2;
-  const myVote = current && current.vote !== NONE ? current.vote : null;
+  const chainVote = current && current.vote !== NONE ? current.vote : null;
+  const myVote = chainVote !== null ? chainVote : voted && voted.round === round ? voted.suspect : null;
+  const locked = myVote !== null;
   const price = t?.price.toNumber() ?? 0;
   const openPrice = t?.openPrice.toNumber() ?? 0;
+
+  useEffect(() => {
+    voteLock.current = "";
+    setVoted(null);
+  }, [round]);
+
+  const accuse = (i: number) => {
+    if (mySeat < 0 || !canVote || busy || myVote !== null || voteLock.current === round || i === mySeat || t?.seats[i]?.player.equals(ZERO)) return;
+    voteLock.current = round;
+    setVoted({ round, suspect: i });
+    sfx.vote();
+    run(
+      `Accused ${SEAT_NAMES[i]}`,
+      () => actions.vote(session, key, mySeat, i),
+      () => { voteLock.current = ""; setVoted((v) => (v?.round === round ? null : v)); },
+    );
+  };
 
   // Deal the role card once per round.
   useEffect(() => {
@@ -163,7 +185,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
     const seatedNow = t.seats.some((s) => !s.player.equals(ZERO)), done = phase === 3 && seatedNow;
     const st: Stage = phase === 1 ? "deal" : trading ? "live" : accusing ? "vote" : done ? (stage === 0 ? "drum" : "reveal") : "idle";
     scene.current.set({
-      stage: st, me: mySeat, insiderMe: !!insider, insider: t.insider, caught: t.caught,
+      stage: st, me: mySeat, insiderMe: !!insider, insider: t.insider, caught: t.caught, canVote: accusing && mySeat >= 0 && canVote && !busy && !locked,
       seats: t.seats.map((s) => ({ empty: s.player.equals(ZERO), pos: s.pos, mood: phase === 2 ? Math.sign(Math.round(equity(s, price, openPrice))) : 0 })),
       wall: {
         price, open: phase >= 2 ? openPrice : 0, elapsed, round: Number(round), points: hist.current.points, marks: hist.current.marks,
@@ -173,7 +195,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
       },
     });
   });
-  pick.current = (i) => { if (mySeat >= 0 && canVote && !busy) { sfx.vote(); run(`Accused ${SEAT_NAMES[i]}`, () => actions.vote(session, key, mySeat, i)); } };
+  pick.current = accuse;
 
   if (!t) return (
     <div className="boot">
@@ -187,7 +209,6 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
   const nextIn = settled ? Math.max(0, Math.ceil(t.settledAt.toNumber() + 12 - now)) : 0;
   const future = insider ? current!.shocks.filter((s) => s.at > elapsed) : [];
   const nextShock = future[0];
-  const accuse = (i: number) => { sfx.vote(); run(`Accused ${SEAT_NAMES[i]}`, () => actions.vote(session, key, mySeat, i)); };
   const votesFor = (i: number) => (settled && stage >= 1 ? t.votes.filter((v, k) => v === i && k !== t.insider).length : 0);
 
   const add = (l: Line) => setProof((p) => [l, ...p].slice(0, 12));
@@ -293,7 +314,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
 
         {ui === "idle" && <div className="headline quiet"><span className="kicker">Table {index + 1}</span><h2>{mySeat >= 0 ? "Get ready" : "Take a seat"}</h2><p>{mySeat >= 0 ? "The opening bell rings in a few seconds." : "Bots fill the empty desks. Any of the six can be the insider."}</p></div>}
         {ui === "deal" && <div className="headline"><h2 className="pulse">Dealing secret roles</h2><p>One of the six is being tipped off inside the private rollup.</p></div>}
-        {ui === "vote" && <div className="headline"><h2>Who was the insider?</h2><p>{mySeat >= 0 ? (canVote ? (myVote !== null ? `You accused ${SEAT_NAMES[myVote]}. You can still change it.` : "Pick your suspect. Votes stay sealed until the reveal.") : "Votes are in. Opening the envelope.") : "The floor is voting in secret."}</p></div>}
+        {ui === "vote" && <div className="headline"><h2>Who was the insider?</h2><p>{mySeat >= 0 ? (canVote ? (myVote !== null ? `You accused ${SEAT_NAMES[myVote]}. Votes stay sealed until the reveal.` : "Pick your suspect. Votes stay sealed until the reveal.") : "Votes are in. Opening the envelope.") : "The floor is voting in secret."}</p></div>}
         {ui === "drum" && <div className="headline"><h2 className="pulse">The insider was</h2></div>}
         {ui === "reveal" && (
           <div className={`headline verdict ${t.caught ? "caught" : "escaped"}`} style={{ ["--c" as any]: SEAT_COLORS[t.insider] }}>
@@ -368,19 +389,21 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
         )}
 
         {(ui === "vote" || (ui === "live" && !seat)) && (
-          <div className={`ballot ${ui === "vote" && mySeat >= 0 && canVote ? "open" : ""}`}>
+          <div className={`ballot ${ui === "vote" && mySeat >= 0 && canVote && !locked ? "open" : ""} ${ui === "vote" && locked ? "locked" : ""}`}>
             {ui === "live" && <span className="ballot-note"><Icon name="eye" size={14} />Spectating. Seats open when this round ends.</span>}
             <div className="suspects">
               {t.seats.map((s, i) => {
-                const empty = s.player.equals(ZERO), mine = i === mySeat, can = ui === "vote" && mySeat >= 0 && canVote && !mine && !empty;
+                const empty = s.player.equals(ZERO), mine = i === mySeat, picked = ui === "vote" && myVote === i;
+                const can = ui === "vote" && mySeat >= 0 && canVote && !mine && !empty && !locked;
+                const showAct = ui === "vote" && mySeat >= 0 && !mine && !empty && (canVote || picked);
                 return (
-                  <button key={i} className={`suspect ${myVote === i && ui === "vote" ? "picked" : ""} ${mine ? "self" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[i] }} disabled={!can || busy} onClick={() => accuse(i)}>
+                  <button key={i} className={`suspect ${picked ? "picked" : ""} ${mine ? "self" : ""} ${ui === "vote" && locked && !picked ? "dim" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[i] }} disabled={!can || busy} onClick={() => accuse(i)}>
                     <Avatar seat={i} size={38} empty={empty} />
                     <span className="s-name">{SEAT_NAMES[i]}{mine && <em>You</em>}</span>
                     <span className={`s-pnl num ${eq[i] >= 0 ? "up" : "down"}`}>{empty ? "–" : chips(eq[i])}</span>
+                    {picked && <span className="s-stamp"><Icon name="gavel" size={13} />Accused</span>}
                     <span className="s-meta">{empty ? "empty" : `${s.trades} ${s.trades === 1 ? "trade" : "trades"}`}</span>
-                    {can && <span className="s-act">{myVote === i ? "Accused" : "Accuse"}</span>}
-                    {myVote === i && ui === "vote" && <span className="s-stamp"><Icon name="gavel" size={13} />Accused</span>}
+                    {showAct && <span className="s-act">{picked ? "ACCUSED" : "Accuse"}</span>}
                   </button>
                 );
               })}
@@ -405,8 +428,8 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
                     <Avatar seat={i} size={38} masked={i === t.insider} />
                     <span className="s-name">{SEAT_NAMES[i]}{i === mySeat && <em>You</em>}</span>
                     <span className={`s-pnl num ${last >= 0 ? "up" : "down"}`}>{chips(last)}</span>
-                    <span className="s-meta">{i === t.insider ? <b className="s-ins">Insider</b> : v !== NONE && v < SEATS ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[v] }} />{SEAT_NAMES[v]}</> : "no vote"}</span>
                     {got > 0 && <span className="s-votes"><Icon name="gavel" size={12} />{got}</span>}
+                    <span className="s-meta">{i === t.insider ? <b className="s-ins">Insider</b> : v !== NONE && v < SEATS ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[v] }} />{SEAT_NAMES[v]}</> : "no vote"}</span>
                   </div>
                 );
               })}
