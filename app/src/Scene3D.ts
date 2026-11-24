@@ -110,7 +110,7 @@ export class Scene3D {
     this.key.shadow.mapSize.set(2048, 2048);
     Object.assign(this.key.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 1, far: 45 });
     this.alarm.position.set(0, 9, 0);
-    this.scene.add(this.amb, this.key, this.alarm, this.deck);
+    this.scene.add(this.amb, this.key, this.alarm, this.deck, this.spotL);
 
     // The deck: a slab balanced on a pivot over the pit.
     const metal = new THREE.MeshStandardMaterial({ color: 0x0d1220, roughness: 0.32, metalness: 0.85 });
@@ -239,12 +239,11 @@ export class Scene3D {
       const pulse = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.58, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0 }));
       pulse.position.y = 0.035;
       root.add(ring, pulse);
-      const spot = new THREE.SpotLight(0xffffff, 0, 22, 0.3, 0.6, 1.1);
-      spot.target = root;
+      const spot = this.spotL;
       const beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0 }));
       beam.frustumCulled = false;
       this.deck.add(root);
-      this.scene.add(spot, beam);
+      this.scene.add(beam);
       const mixer = new THREE.AnimationMixer(body), actions: Record<string, THREE.AnimationAction> = {};
       for (const clip of gltf.animations) actions[clip.name] = mixer.clipAction(clip);
       actions.Idle.time = Math.random() * 2;
@@ -430,6 +429,7 @@ export class Scene3D {
     return o ? (o.userData.seat as number) : -1;
   }
   private hot = -1;
+  private spotL = new THREE.SpotLight(0xffffff, 0, 24, 0.3, 0.6, 1.1);
   private quality = 2;
   private frames = 0;
   private spent = 0;
@@ -458,8 +458,8 @@ export class Scene3D {
     if (this.orbit) { this.camPos.set(Math.sin(t * 0.08) * 20 * a, 7.5, Math.cos(t * 0.08) * 20 * a); this.camLook.set(0, 2.5, -2); }
     else if (stage === "live") {
       const last = v!.wall.elapsed >= 50, z = me ? me.root.position.z * 0.15 : 0;
-      if (last) { this.camPos.set(meX * 0.5, 5.6, 14 * a + z); this.camLook.set(0, 4, -3.5); fov = 56; }
-      else { this.camPos.set(meX * 0.5, 7.4, 15.2 * a + z); this.camLook.set(meX * 0.3, 4.3, -4); }
+      if (last) { this.camPos.set(meX * 0.4, 11, 21 * a + z); this.camLook.set(0, 1.2, 0.8); fov = 56; }
+      else { this.camPos.set(meX * 0.4, 13, 22.5 * a + z); this.camLook.set(meX * 0.25, 1.2, 0.8); }
     } else if (stage === "deal" && me) { this.camPos.set(meX + 1.6, 2.1, -4.6 * a); this.camLook.set(meX, 1.5, 0); }
     else if (stage === "vote" || stage === "drum") { this.camPos.set(this.hot >= 0 ? laneX(this.hot) * 0.12 : 0, 2.7, 16.6 * a); this.camLook.set(0, 1.55, 6.6); }
     else if (stage === "reveal" && this.bots[v!.insider]) {
@@ -472,7 +472,7 @@ export class Scene3D {
   private loop = () => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.loop);
-    const raw = Math.min(this.clock.getDelta(), 0.1), t = this.clock.elapsedTime, v = this.view;
+    const real = Math.min(this.clock.getDelta(), 0.5), raw = Math.min(real, 0.1), t = this.clock.elapsedTime, v = this.view;
     this.slow = Math.max(0, this.slow - raw);
     const dt = raw * (this.slow > 0 ? 0.3 : 1);
     const stage = v?.stage ?? "idle", dark = this.lined(stage), last = stage === "live" && v!.wall.elapsed >= 50;
@@ -495,7 +495,7 @@ export class Scene3D {
     this.deck.rotation.x = this.tilt;
 
     this.flash = Math.max(0, this.flash - raw * 0.9);
-    this.amb.intensity += ((dark ? 0.1 : 0.6) - this.amb.intensity) * k;
+    this.amb.intensity += ((stage === "vote" ? 0.45 : dark ? 0.12 : 0.6) - this.amb.intensity) * k;
     this.key.intensity += ((dark ? 0.06 : last ? 0.7 : 1.3) - this.key.intensity) * k;
     const beat = last ? Math.max(0, 1 - ((v!.wall.elapsed % 1) * 3)) : 0;
     this.alarm.color.set(0xff3030);
@@ -518,6 +518,7 @@ export class Scene3D {
     }
     this.tiles.instanceColor!.needsUpdate = true;
 
+    let chosen = -1;
     this.bots.forEach((b, i) => {
       b.mixer.update(dt);
       const s = v?.seats[i];
@@ -527,7 +528,7 @@ export class Scene3D {
       if (v && s && b.body.visible && b.down === 0 && !(stage === "reveal" && i === v.insider)) {
         const to = this.spot(i, v), d = to.sub(b.root.position), len = d.length();
         if (len > 0.04) {
-          const step = Math.min(len, (dark ? 10 : 7.5) * dt);
+          const step = Math.min(len, (dark ? 10 : 7.5) * real);
           b.root.position.addScaledVector(d, step / len);
           b.yaw = Math.atan2(d.x, d.z);
           b.trail += step;
@@ -546,9 +547,7 @@ export class Scene3D {
 
       const world = b.root.getWorldPosition(new THREE.Vector3());
       const lit = !b.body.visible ? 0 : stage === "vote" ? (this.hot === i ? 90 : 45) : stage === "drum" ? (Math.floor(t * 9) % N === i ? 90 : 3) : stage === "reveal" ? (i === v!.insider ? 110 : 0) : 0;
-      b.spot.position.set(world.x, 11, world.z + 3);
-      b.spot.intensity += (lit - b.spot.intensity) * Math.min(1, raw * 8);
-      b.spot.color.set(stage === "reveal" && i === v!.insider ? MAGENTA : 0xffffff);
+      if (lit > 80) { chosen = i; this.spotL.position.set(world.x, 11, world.z + 3); this.spotL.target = b.root; this.spotL.color.set(stage === "reveal" ? MAGENTA : 0xffffff); }
 
       // The deal: a beam from the Vault to every robot. Only yours is coloured, and only you see it.
       const bm = b.beam.material as THREE.MeshBasicMaterial, show = stage === "deal" && !s?.empty;
@@ -570,6 +569,7 @@ export class Scene3D {
       }
     });
 
+    this.spotL.intensity += ((chosen >= 0 ? 110 : 0) - this.spotL.intensity) * Math.min(1, raw * 8);
     // Footprints fade over ten seconds.
     for (const f of this.prints) {
       if (f.life <= 0) continue;
