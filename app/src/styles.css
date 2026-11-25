@@ -231,7 +231,7 @@ h1, h2, p { margin: 0; }
 .lots i.long { background: var(--up); box-shadow: 0 0 10px rgba(31, 229, 142, .6); }
 .lots i.shortp { background: var(--down); box-shadow: 0 0 10px rgba(255, 74, 102, .6); }
 .mypos-scale { display: flex; justify-content: space-between; font: 600 12px/1 var(--hud); letter-spacing: .08em; text-transform: uppercase; color: #6f79a8; }
-.waitbox { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: center; text-align: center; padding: 14px 20px; border-radius: 18px; background: var(--panel); box-shadow: inset 0 0 0 2px var(--line), 0 6px 0 rgba(0, 0, 0, .5); backdrop-filter: blur(10px); font-size: 16px; }
+.waitbox { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center; text-align: center; padding: 12px 18px; border-radius: 18px; background: var(--panel); box-shadow: inset 0 0 0 2px var(--line), 0 6px 0 rgba(0, 0, 0, .5); backdrop-filter: blur(10px); font-size: 16px; }
 .spinner { width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--ink-3); border-top-color: var(--gold); animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -301,17 +301,21 @@ h1, h2, p { margin: 0; }
 .verdict-ic { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--up); color: #04200f; }
 .line.bad .verdict-ic { background: var(--down); color: #fff; }
 
-/* Role card: one full-screen beat at the bell */
-.rolecard { position: absolute; z-index: 30; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; text-align: center; background: radial-gradient(60% 55% at 50% 50%, rgba(22, 60, 96, .96), rgba(4, 6, 20, .97) 75%); animation: rcin 3s both; overflow: hidden; }
-.rolecard.ins { background: radial-gradient(60% 55% at 50% 50%, rgba(110, 72, 0, .96), rgba(10, 6, 2, .97) 75%); }
+/* Role card: compact stage card clear of the clock and trade buttons, tap to dismiss */
+.rolecard { position: absolute; z-index: 9; left: 50%; top: 46%; transform: translate(-50%, -50%); width: min(360px, calc(100% - 32px)); display: grid; place-content: center; justify-items: center; gap: 8px; padding: 18px 20px; border-radius: 20px; text-align: center; cursor: pointer; background: radial-gradient(75% 75% at 50% 45%, rgba(22, 60, 96, .95), rgba(8, 12, 34, .96) 80%); box-shadow: inset 0 0 0 2px rgba(127, 214, 255, .45), 0 18px 44px rgba(0, 0, 0, .65); overflow: hidden; }
+.rolecard.ins { background: radial-gradient(75% 75% at 50% 45%, rgba(110, 72, 0, .95), rgba(18, 12, 4, .96) 80%); box-shadow: inset 0 0 0 2px rgba(255, 197, 49, .6), 0 18px 44px rgba(0, 0, 0, .65); }
 .rc-rays { position: absolute; left: 50%; top: 50%; width: 200vmax; height: 200vmax; margin: -100vmax; background: repeating-conic-gradient(from 0deg, rgba(255, 255, 255, .05) 0 8deg, transparent 8deg 16deg); animation: spin 40s linear infinite; pointer-events: none; }
 .rolecard > :not(.rc-rays) { position: relative; }
-.rc-kicker { font: 700 18px/1 var(--hud); letter-spacing: .2em; text-transform: uppercase; color: #c9d0f2; }
-.rolecard h2 { font: 400 clamp(56px, 13vw, 150px)/.95 var(--sign); color: var(--cool); text-shadow: 0 6px 0 rgba(0, 0, 0, .5); animation: slam .5s .1s var(--ease) both; }
+.rc-kicker { font: 700 13px/1 var(--hud); letter-spacing: .18em; text-transform: uppercase; color: #c9d0f2; }
+.rolecard h2 { font: 400 clamp(32px, 5vw, 48px)/.95 var(--sign); color: var(--cool); text-shadow: 0 4px 0 rgba(0, 0, 0, .5); }
 .rolecard.ins h2 { color: var(--gold); }
-.rolecard p { max-width: 34ch; font-size: 19px; color: #e6e9fb; }
-.rolecard .avatar { animation: rise .5s var(--ease) both; }
-@keyframes rcin { 0% { opacity: 0; } 6% { opacity: 1; } 88% { opacity: 1; } 100% { opacity: 0; } }
+.rolecard p { max-width: 30ch; font-size: 14.5px; color: #e6e9fb; line-height: 1.3; }
+@media (prefers-reduced-motion: no-preference) {
+  .rolecard { animation: rcin 2.5s both; }
+  .rolecard h2 { animation: slam .4s .06s var(--ease) both; }
+  .rolecard .avatar { animation: rise .4s var(--ease) both; }
+}
+@keyframes rcin { 0% { opacity: 0; } 8% { opacity: 1; } 90% { opacity: 1; } 100% { opacity: 0; } }
 
 .ui-vote .toast, .ui-reveal .toast { bottom: calc(206px + var(--safe-b)); }
 .toast { position: absolute; z-index: 40; left: 50%; bottom: calc(132px + var(--safe-b)); transform: translateX(-50%); max-width: calc(100vw - 32px); padding: 8px 14px; border-radius: 9px; background: #fff; color: #10122b; font: 700 15px/1.2 var(--hud); letter-spacing: .03em; box-shadow: 0 4px 0 rgba(0, 0, 0, .5); animation: drop .25s var(--ease) both; pointer-events: none; text-align: center; }
@@ -417,7 +421,8 @@ h1, h2, p { margin: 0; }
   .drawer { position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; height: min(78dvh, 640px); border-radius: 18px 18px 0 0; padding-bottom: var(--safe-b); animation-name: sheet; box-shadow: inset 0 2px 0 var(--line-2), 0 -20px 60px rgba(0, 0, 0, .7); }
   @keyframes sheet { from { transform: translateY(60px); opacity: 0; } }
   .toast, .ui-vote .toast, .ui-reveal .toast { bottom: auto; top: calc(58dvh + var(--safe-t)); }
-  .rolecard p { font-size: 17px; }
+  .rolecard { top: 50%; width: min(320px, calc(100% - 24px)); padding: 14px 16px; gap: 6px; }
+  .rolecard p { font-size: 13.5px; }
 }
 @media (max-width: 820px) and (max-height: 700px) {
   .game { grid-template-rows: auto minmax(200px, 1fr) auto auto; }
