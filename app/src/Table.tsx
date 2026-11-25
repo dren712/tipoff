@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FIRST_TABLE, MAX_POS, NONE, ROUND_SECS, SEATS, Session, Table, SeatPrivate, VOTE_SECS, ZERO, actions, base, equity, explorer,
+  FIRST_TABLE, INTERMISSION, MAX_POS, NONE, ROUND_SECS, SEATS, Session, Table, SeatPrivate, VOTE_SECS, ZERO, actions, base, equity, explorer,
   isRumour, voteSeat,
   fetchSeat, fetchTable, ledgerPda, redraw, secretPda, seatPda, short, tablePda,
 } from "./chain";
@@ -210,7 +210,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
   const seated = t.seats.some((s) => !s.player.equals(ZERO));
   const settled = phase === 3 && seated;
   const canSit = mySeat < 0 && (phase === 0 || phase === 3);
-  const nextIn = settled ? Math.max(0, Math.ceil(t.settledAt.toNumber() + 12 - now)) : 0;
+  const nextIn = settled ? Math.max(0, Math.ceil(t.settledAt.toNumber() + INTERMISSION - now)) : 0;
   const future = insider ? current!.shocks.filter((s) => s.at > elapsed) : [];
   const nextShock = future[0];
   const votesFor = (i: number) => (settled && stage >= 1 ? t.votes.filter((v, k) => voteSeat(v) === i && k !== t.insider).length : 0);

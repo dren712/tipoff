@@ -6,7 +6,8 @@
     "round": "tsx scripts/round.ts",
     "provision": "tsx scripts/provision.ts",
     "house": "tsx scripts/house.ts",
-    "attack": "tsx scripts/attack.ts"
+    "attack": "tsx scripts/attack.ts",
+    "test:bots": "tsx scripts/bots.test.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.32.1",

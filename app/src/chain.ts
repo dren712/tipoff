@@ -20,6 +20,7 @@ export const TABLES = 4;
 export const LOT = 1e9;
 export const LEVERAGE = 12;
 export const CONVICTION = 8;
+export const INTERMISSION = 8;
 export const ZERO = PublicKey.default;
 
 export const isRumour = (s: Pick<Shock, "bps">) => Math.abs(s.bps) === 1;
