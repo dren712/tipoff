@@ -15,6 +15,8 @@ pub const LOT: i64 = 1_000_000_000;
 pub const ACCUSE_WIN: i64 = 100_000_000;
 pub const ACCUSE_LOSS: i64 = 50_000_000;
 pub const CAUGHT_FINE: i64 = 100_000_000;
+pub const LEVERAGE: i64 = 12;
+pub const MAX_SWING_BPS: i64 = 600;
 
 pub struct Draw {
     pub insider: u8,
@@ -22,17 +24,33 @@ pub struct Draw {
 }
 
 /// Derives the insider and the shocks from the hidden salt. One shock lands in each
-/// 12-second window from 8 s to 56 s, moving the price 0.8% to 2.5% up or down.
+/// 12-second window from 8 s to 56 s: windows 1-2 move 0.8% to 2.5%, window 3 moves
+/// 1.2% to 3.75% (1.5x), and window 4 moves 1.6% to 5.0% (2x), up or down.
 pub fn draw_round(salt: &[u8; 32]) -> Draw {
     let h = hashv(&[b"tipoff-draw", &salt[..]]).to_bytes();
     let mut shocks = [Shock::default(); SHOCKS];
     for (i, s) in shocks.iter_mut().enumerate() {
         let b = &h[1 + i * 4..5 + i * 4];
-        let size = 80 + (u16::from_le_bytes([b[1], b[2]]) % 171) as i16;
+        let raw = 80 + (u16::from_le_bytes([b[1], b[2]]) % 171) as i16;
+        let size = match i {
+            2 => raw * 3 / 2,
+            3 => raw * 2,
+            _ => raw,
+        };
         s.at = 8 + (i as u8) * 12 + b[0] % 12;
         s.bps = if b[3] & 1 == 0 { size } else { -size };
     }
     Draw { insider: h[0] % SEATS as u8, shocks }
+}
+
+/// Applies the `LEVERAGE`x oracle move from `open_price`, clamped to `+-MAX_SWING_BPS`.
+pub fn levered(oracle_price: i64, open_price: i64) -> Result<i64> {
+    require!(open_price > 0, TipoffError::BadPrice);
+    let open = open_price as i128;
+    let move_bps = ((oracle_price as i128) - open) * 10_000 / open;
+    let swung_bps =
+        (move_bps * (LEVERAGE as i128)).clamp(-(MAX_SWING_BPS as i128), MAX_SWING_BPS as i128);
+    shocked(open_price, swung_bps as i32)
 }
 
 pub fn shocked(oracle_price: i64, bps: i32) -> Result<i64> {
@@ -124,7 +142,12 @@ mod tests {
             for (i, s) in d.shocks.iter().enumerate() {
                 assert!(s.at as i64 >= 8 + 12 * i as i64 && (s.at as i64) < 20 + 12 * i as i64);
                 assert!((s.at as i64) < ROUND_SECS);
-                assert!(s.bps.abs() >= 80 && s.bps.abs() <= 250);
+                let bounds = match i {
+                    2 => 120..=375,
+                    3 => 160..=500,
+                    _ => 80..=250,
+                };
+                assert!(bounds.contains(&s.bps.abs()), "window {i} bps {}", s.bps);
             }
         }
     }
@@ -503,5 +526,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn levered_move_clamping_and_bad_open() {
+        // Unchanged oracle returns exact open price.
+        assert_eq!(levered(P, P).unwrap(), P);
+
+        // +0.10% oracle move scales 12x to +1.20% (+120 bps).
+        let up_10bps = P + P / 1_000;
+        assert_eq!(levered(up_10bps, P).unwrap(), shocked(P, 120).unwrap());
+        assert_eq!(levered(100_10000000, 100_00000000).unwrap(), 101_20000000);
+
+        // -0.10% oracle move scales 12x to -1.20% (-120 bps).
+        let down_10bps = P - P / 1_000;
+        assert_eq!(levered(down_10bps, P).unwrap(), shocked(P, -120).unwrap());
+
+        // Clamp holds at +/-MAX_SWING_BPS (+/-600 bps) on both ends.
+        let at_upper_edge = P * 10_050 / 10_000;
+        let far_up = P * 12_000 / 10_000;
+        assert_eq!(levered(at_upper_edge, P).unwrap(), shocked(P, MAX_SWING_BPS as i32).unwrap());
+        assert_eq!(levered(far_up, P).unwrap(), shocked(P, MAX_SWING_BPS as i32).unwrap());
+
+        let at_lower_edge = P * 9_950 / 10_000;
+        let far_down = P * 8_000 / 10_000;
+        assert_eq!(levered(at_lower_edge, P).unwrap(), shocked(P, -(MAX_SWING_BPS as i32)).unwrap());
+        assert_eq!(levered(far_down, P).unwrap(), shocked(P, -(MAX_SWING_BPS as i32)).unwrap());
+
+        // Non-positive open price returns BadPrice; overflow returns Overflow.
+        assert_tipoff_err(levered(P, 0), TipoffError::BadPrice);
+        assert_tipoff_err(levered(P, -1), TipoffError::BadPrice);
+        assert_tipoff_err(levered(P, i64::MIN), TipoffError::BadPrice);
+        assert_tipoff_err(levered(i64::MAX, i64::MAX - i64::MAX / 100), TipoffError::Overflow);
+    }
+
+    #[test]
+    fn draw_matches_fixed_salt_test_vector() {
+        // Must match app/src/chain.ts::redraw for the same 32-byte salt [0..32].
+        let salt: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let d = draw_round(&salt);
+        assert_eq!(d.insider, 0);
+        assert_eq!(
+            d.shocks,
+            [
+                Shock { at: 10, bps: 249 },
+                Shock { at: 31, bps: -171 },
+                Shock { at: 43, bps: -319 },
+                Shock { at: 51, bps: -240 },
+            ]
+        );
     }
 }

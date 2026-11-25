@@ -27,7 +27,7 @@ Built for Solana Blitz v10 on MagicBlock's Private Ephemeral Rollup.
 
 ## How a round plays
 
-1. **Sit down and deal roles.** Six seats (`Ruby`, `Amber`, `Rusty`, `Jade`, `Azure`, `Violet`) join with a browser guest key and zero gas fees. MagicBlock VRF inside the private rollup chooses one insider and four shocks (`0.8%` to `2.5%` up or down in 12-second windows between `8 s` and `56 s`), writing the shock list only to the insider's private seat account.
+1. **Sit down and deal roles.** Six seats (`Ruby`, `Amber`, `Rusty`, `Jade`, `Azure`, `Violet`) join with a browser guest key and zero gas fees. MagicBlock VRF inside the private rollup chooses one insider and four escalating shocks (`0.8%` to `2.5%` in windows 1–2, `1.2%` to `3.75%` in window 3, `1.6%` to `5.0%` in window 4, up or down in 12-second windows between `8 s` and `56 s`), writing the shock list only to the insider's private seat account.
 2. **Trade on the six-lane deck (60 seconds).** Each robot stands on its own lane between the green `LONG` gate and the red `SHORT` gate, holding up to `+5` lots long or `-5` lots short (`1,000` chips per lot at the opening price). Buying or selling moves the robot along its lane and updates the public trade tape and back-wall price chart.
 3. **React to news shocks.** As each scheduled shock lands, the SOL/USD floor price jumps or drops, marking the back-wall chart and public tape so non-insiders can look for whoever positioned just beforehand.
 4. **Cast a sealed accusation (15 seconds).** When the 60-second clock ends, all six robots walk into a front-row line-up (`Who was the insider?`). Each player can accuse one suspect, writing their vote to their private seat account; an accusation is final once cast and stays hidden from everyone until settlement.
@@ -64,7 +64,7 @@ Tipoff cannot run on plain Solana because both hidden game state and sub-second 
 ## Proof
 
 - **11/11 live devnet attacks rejected:** [`npm run attack`](docs/ATTACKS.md) (`scripts/attack.ts`) creates a throwaway unfunded keypair, sits on live devnet table `7103`, and verifies that all 11 cheat attempts fail at the rollup permissions or program checks (`read_sealed`, `trade_unowned_seat`, `trade_position_limit`, `vote_self`, `vote_twice` with `AlreadyVoted` / error `6011`, `settle_early`, `settle_twice`, `fake_vrf_callback`, `start_round_live`, `tick_fake_price_feed`, `checkpoint_unsettled_stranger`). See [`docs/ATTACKS.md`](docs/ATTACKS.md) for the full run and defense mapping.
-- **40/40 Rust unit, distribution, and property tests passing:** `cargo test -p tipoff` runs 32 unit tests (`rules.rs`, `oracle.rs`, `lib.rs`) and 8 integration/property tests in `programs/tipoff/tests/invariants.rs` (0 ignored), and `anchor build --ignore-keys` builds the program and IDL. Writing the suite caught two edge-case panics that were fixed and covered by regression tests in [`docs/TESTS.md`](docs/TESTS.md):
+- **44/44 Rust unit, distribution, and property tests passing:** `cargo test -p tipoff` runs 35 unit tests (`rules.rs`, `oracle.rs`, `lib.rs`) and 9 integration/property tests in `programs/tipoff/tests/invariants.rs` (0 ignored), and `anchor build --ignore-keys` builds the program and IDL. Writing the suite caught two edge-case panics that were fixed and covered by regression tests in [`docs/TESTS.md`](docs/TESTS.md):
   1. `rules::apply_trade` panicked on `pos.abs()` when `pos + delta == i8::MIN` (`-128`); fixed with a range check returning `TipoffError::PositionLimit` (`rules::tests::apply_trade_i8_min_is_position_limit`).
   2. `oracle::read_price` panicked when `now - publish_time` overflowed (for example `publish_time == i64::MIN`); fixed using `abs_diff` returning `TipoffError::BadPrice` (`oracle::tests::read_price_extreme_timestamp_is_bad_price`).
 - **On-chain devnet record:** Program [`BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet) stores committed `Table` state and the `Ledger` PDA updated by `checkpoint` -> `record_round`.
@@ -130,7 +130,7 @@ ledger: round recorded  ◄─────────   checkpoint:  commit tab
 - **Guest keys in `localStorage`.** Browser guest keys are stored locally (clearing site storage drops the seat). `Player` profile PDAs (`init_player`, `cash_out`) exist in the program, while the web UI uses guest sessions only.
 - **Operator-derived bot keys.** House bot keys in `scripts/house.ts` are derived from the operator key, so the operator can read bot seats, though it cannot read human seats or `Secret`.
 - **Oracle exponent handling.** Because the devnet feed account stores a mismatched exponent value, `oracle.rs` interprets prices as 8 decimals directly from the Pyth Lazer SOL/USD feed layout.
-- **Rollup testing environment.** Pure Rust logic, VRF draw properties, and oracle bounds are covered by 40 tests in `cargo test -p tipoff` ([`docs/TESTS.md`](docs/TESTS.md)), while rollup execution, permissions, and attacks are tested live against devnet via `scripts/round.ts`, `scripts/leak.ts`, and `scripts/attack.ts` ([`docs/ATTACKS.md`](docs/ATTACKS.md)) rather than a local validator.
+- **Rollup testing environment.** Pure Rust logic, VRF draw properties, and oracle bounds are covered by 44 tests in `cargo test -p tipoff` ([`docs/TESTS.md`](docs/TESTS.md)), while rollup execution, permissions, and attacks are tested live against devnet via `scripts/round.ts`, `scripts/leak.ts`, and `scripts/attack.ts` ([`docs/ATTACKS.md`](docs/ATTACKS.md)) rather than a local validator.
 
 ## Repository
 
@@ -146,7 +146,7 @@ programs/tipoff/
 app/             React + Three.js web client (Vite)
 docs/
   ATTACKS.md     live 11-attack devnet verification log and rule mapping
-  TESTS.md       40-test Rust suite breakdown and fixed edge-case panics
+  TESTS.md       44-test Rust suite breakdown and fixed edge-case panics
   SUBMISSION.md  hackathon project descriptions and tech stack
   VIDEO.md       2:30 demo script and shot list
   screens/       desktop (1440x900) and phone (390x844) screenshots
@@ -163,7 +163,7 @@ scripts/
 ## Run it
 
 ```bash
-# build Solana program & IDL and run Rust tests (40 tests)
+# build Solana program & IDL and run Rust tests (44 tests)
 anchor build --ignore-keys
 cargo test -p tipoff
 
