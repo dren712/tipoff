@@ -10,6 +10,7 @@ import { Icon, Logo } from "./Icon";
 import { Avatar, SEAT_COLORS, SEAT_NAMES } from "./Avatar";
 import { isMuted, setMuted, sfx } from "./sound";
 import { Scene3D, Stage } from "./Scene3D";
+import "./css/onboarding.css";
 
 const chips = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(0)}`;
 const pct = (bps: number) => `${bps > 0 ? "+" : "−"}${(Math.abs(bps) / 100).toFixed(1)}%`;
@@ -18,7 +19,7 @@ type Line = { ok: boolean; text: string; href?: string };
 type Pop = { id: number; delta: number };
 type Hist = { round: string; points: Point[]; marks: Mark[]; seen: number; shocks: number; phase: number };
 
-export function TableView({ session, index, median, onLeave, onLatency }: { session: Session; index: number; median: number | null; onLeave: () => void; onLatency: (ms: number) => void }) {
+export function TableView({ session, index, autoSit = false, median, onLeave, onLatency }: { session: Session; index: number; autoSit?: boolean; median: number | null; onLeave: () => void; onLatency: (ms: number) => void }) {
   const key = useMemo(() => tablePda(FIRST_TABLE + index), [index]);
   const [t, setT] = useState<Table | null>(null);
   const [now, setNow] = useState(Date.now() / 1000);
@@ -32,10 +33,15 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
   const [roleCard, setRoleCard] = useState<{ round: string; insider: boolean } | null>(null);
   const [stage, setStage] = useState(2); // reveal: 0 drum roll, 1 unmask, 2 scores
   const [voted, setVoted] = useState<{ round: string; suspect: number } | null>(null);
+  const [wantSit, setWantSit] = useState(autoSit);
+  const [witnessedRound, setWitnessedRound] = useState("");
+  const [coachRound, setCoachRound] = useState("");
   const [muted, setMute] = useState(isMuted());
   const hist = useRef<Hist>({ round: "", points: [], marks: [], seen: 0, shocks: 0, phase: -1 });
   const shownRole = useRef("");
   const voteLock = useRef("");
+  const sitAttempt = useRef({ count: 0, triedSeat: -1 });
+  const autoSitting = useRef(false);
   const me = session.kp.publicKey;
   const mySeatRef = useRef(-1);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -83,6 +89,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
         if (h.phase === 1) sfx.bell();
       }
       if (next.phase === 3 && h.phase === 2) {
+        setWitnessedRound(round);
         setStage(0);
         sfx.drum();
         setTimeout(() => { setStage(1); next.caught ? sfx.caught() : sfx.escaped(); }, 1600);
@@ -166,7 +173,42 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
     setRoleCard({ round, insider: current.role === 2 });
     sfx.role(current.role === 2);
   }, [current, phase, round, elapsed]);
-  useEffect(() => { if (!roleCard) return; const id = setTimeout(() => setRoleCard(null), 3000); return () => clearTimeout(id); }, [roleCard]);
+  useEffect(() => { if (!roleCard) return; const id = setTimeout(() => setRoleCard(null), 2500); return () => clearTimeout(id); }, [roleCard]);
+
+  // Auto-sit when launched from Lobby "Play now": retries next open seat once on failure, then falls back to manual.
+  useEffect(() => {
+    if (!wantSit || !t || mySeat >= 0) {
+      if (mySeat >= 0 && wantSit) setWantSit(false);
+      return;
+    }
+    if (busy || autoSitting.current || (phase !== 0 && phase !== 3)) return;
+    const target = t.seats.findIndex((s, i) => s.player.equals(ZERO) && i !== sitAttempt.current.triedSeat);
+    if (target < 0) return;
+    autoSitting.current = true;
+    run(
+      "Seated",
+      () => actions.sit(session, key, target),
+      () => {
+        if (sitAttempt.current.count === 0) {
+          sitAttempt.current = { count: 1, triedSeat: target };
+        } else {
+          setWantSit(false);
+        }
+      },
+    ).finally(() => {
+      autoSitting.current = false;
+    });
+  }, [wantSit, t, mySeat, phase, busy, session, key, run]);
+
+  // First-round-only coach line for the first 10 s of trading.
+  useEffect(() => {
+    if (!seat || phase !== 2 || !trading || elapsed >= 10 || coachRound === round) return;
+    try {
+      if (localStorage.getItem("tipoff-coached")) return;
+      localStorage.setItem("tipoff-coached", "1");
+      setCoachRound(round);
+    } catch {}
+  }, [seat, phase, trading, elapsed, round, coachRound]);
 
   const trade = (d: number) => {
     if (!seat || !trading || busy) return;
@@ -186,7 +228,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
   // Push the round into the 3D floor.
   useEffect(() => {
     if (!t || !scene.current) return;
-    const seatedNow = t.seats.some((s) => !s.player.equals(ZERO)), done = phase === 3 && seatedNow;
+    const seatedNow = t.seats.some((s) => !s.player.equals(ZERO)), done = phase === 3 && seatedNow && witnessedRound === round;
     const st: Stage = phase === 1 ? "deal" : trading ? "live" : accusing ? "vote" : done ? (stage === 0 ? "drum" : "reveal") : "idle";
     scene.current.set({
       stage: st, me: mySeat, insiderMe: !!insider, insider: t.insider, caught: t.caught, canVote: accusing && mySeat >= 0 && canVote && !busy && !locked,
@@ -208,8 +250,11 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
   );
 
   const seated = t.seats.some((s) => !s.player.equals(ZERO));
-  const settled = phase === 3 && seated;
+  const witnessed = witnessedRound === round;
+  const settled = phase === 3 && seated && witnessed;
   const canSit = mySeat < 0 && (phase === 0 || phase === 3);
+  const openIn = phase === 2 ? Math.max(1, Math.ceil(t.tStart.toNumber() + ROUND_SECS + VOTE_SECS - now)) : 0;
+  const waitState = phase === 1 ? "Dealing secret roles" : mySeat >= 0 ? "Bots are joining" : wantSit && phase === 2 ? `Seat opens in ${openIn}s` : "Finding you a seat";
   const nextIn = settled ? Math.max(0, Math.ceil(t.settledAt.toNumber() + INTERMISSION - now)) : 0;
   const future = insider ? current!.shocks.filter((s) => s.at > elapsed) : [];
   const nextShock = future[0];
@@ -256,6 +301,8 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
 
   // Presentation only below: which screen is showing and the numbers it prints.
   const ui: Stage = phase === 1 ? "deal" : trading ? "live" : accusing ? "vote" : settled ? (stage === 0 ? "drum" : "reveal") : "idle";
+  const showHowTo = (ui === "idle" || ui === "deal") && (mySeat >= 0 || wantSit);
+  const showCoach = ui === "live" && !!seat && trading && coachRound === round && elapsed < 10;
   const eq = t.seats.map((s) => (phase === 2 ? equity(s, price, openPrice) : 0));
   const myEq = mySeat >= 0 ? eq[mySeat] : 0;
   const change = openPrice && phase >= 2 ? ((price - openPrice) / openPrice) * 100 : 0;
@@ -316,8 +363,28 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
           </div>
         )}
 
-        {ui === "idle" && <div className="headline quiet"><span className="kicker">Table {index + 1}</span><h2>{mySeat >= 0 ? "Get ready" : "Take a seat"}</h2><p>{mySeat >= 0 ? "The opening bell rings in a few seconds." : "Bots fill the empty desks. Any of the six can be the insider."}</p></div>}
-        {ui === "deal" && <div className="headline"><h2 className="pulse">Dealing secret roles</h2><p>One of the six is being tipped off inside the private rollup.</p></div>}
+        {showHowTo && (
+          <section className="howto" aria-label="How to play">
+            <span className="howto-title">How to play</span>
+            <ul className="howto-list">
+              <li>One of the six is secretly told every news shock before it hits.</li>
+              <li>Buy if you think SOL jumps, Sell if you think it dumps. Every trade is public.</li>
+              <li>After 60 s, accuse the insider. Right +100, wrong −50.</li>
+            </ul>
+          </section>
+        )}
+        {ui === "idle" && !showHowTo && <div className="headline quiet"><span className="kicker">Table {index + 1}</span><h2>{mySeat >= 0 ? "Get ready" : "Take a seat"}</h2><p>{mySeat >= 0 ? "The opening bell rings in a few seconds." : "Bots fill the empty desks. Any of the six can be the insider."}</p></div>}
+        {ui === "deal" && !showHowTo && <div className="headline"><h2 className="pulse">Dealing secret roles</h2><p>One of the six is being tipped off inside the private rollup.</p></div>}
+        {roleCard && roleCard.round === round && (
+          <button type="button" className={`rolecard ${roleCard.insider ? "ins" : ""}`} onClick={() => setRoleCard(null)} aria-label="Dismiss role card">
+            <div className="rc-rays" />
+            <span className="rc-kicker">Your role</span>
+            {mySeat >= 0 && <Avatar seat={mySeat} size={64} masked={roleCard.insider} />}
+            <h2>{roleCard.insider ? "Insider" : "Trader"}</h2>
+            <p>{roleCard.insider ? "You see every news shock early. Profit, but do not get caught." : "Someone knows the news early. Watch who trades just before it."}</p>
+            <span className="rc-tap">Tap to dismiss</span>
+          </button>
+        )}
         {ui === "vote" && <div className="headline"><h2>Who was the insider?</h2><p>{mySeat >= 0 ? (canVote ? (myVote !== null ? `You accused ${SEAT_NAMES[myVote]}. Votes stay sealed until the reveal.` : "Pick your suspect. Votes stay sealed until the reveal.") : "Votes are in. Opening the envelope.") : "The floor is voting in secret."}</p></div>}
         {ui === "drum" && <div className="headline"><h2 className="pulse">The insider was</h2></div>}
         {ui === "reveal" && (
@@ -367,7 +434,9 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
 
       <footer className="tray">
         {ui === "live" && seat && (
-          <div className="deck">
+          <>
+            {showCoach && <div className="coach" role="status">Watch who trades just before the news.</div>}
+            <div className="deck">
             <button className="trade sell" disabled={!trading || seat.pos <= -MAX_POS} onClick={() => trade(-1)}><Icon name="down" size={22} /><span>Sell</span><kbd>↓</kbd></button>
             <div className="mypos">
               <div className="mypos-top">
@@ -380,21 +449,22 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
             </div>
             <button className="trade buy" disabled={!trading || seat.pos >= MAX_POS} onClick={() => trade(1)}><Icon name="up" size={22} /><span>Buy</span><kbd>↑</kbd></button>
           </div>
+          </>
         )}
 
         {(ui === "idle" || ui === "deal") && (
           <div className="waitbox">
-            {mySeat >= 0 ? <><span className="spinner" /><span><b>You are in as {SEAT_NAMES[mySeat]}.</b> {ui === "deal" ? "Roles are being dealt." : "Waiting for the bell."}</span></>
+            {mySeat >= 0 || wantSit ? <><span className="spinner" /><span>{mySeat >= 0 && <><b>You are in as {SEAT_NAMES[mySeat]}.</b> </>}<span className="state-line">{waitState}</span></span></>
               : canSit && firstOpen >= 0 ? <>
                 <button className="btn gold big" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, firstOpen))}><Icon name="seat" size={22} />Take a seat</button>
                 <span className="muted">or pick a desk on the floor</span>
-              </> : <span className="muted">{ui === "deal" ? "Roles are being dealt. You are watching this round." : "All desks are taken. You can watch the next round."}</span>}
+              </> : <span className="state-line">{waitState}</span>}
           </div>
         )}
 
         {(ui === "vote" || (ui === "live" && !seat)) && (
           <div className={`ballot ${ui === "vote" && mySeat >= 0 && canVote && !locked ? "open" : ""} ${ui === "vote" && locked ? "locked" : ""}`}>
-            {ui === "live" && <span className="ballot-note"><Icon name="eye" size={14} />Spectating. Seats open when this round ends.</span>}
+            {(ui === "live" || (ui === "vote" && wantSit && mySeat < 0)) && <span className="ballot-note">{wantSit ? <><span className="spinner" /><span className="state-line">{waitState}</span></> : <><Icon name="eye" size={14} />Spectating. Seats open when this round ends.</>}</span>}
             <div className="suspects">
               {t.seats.map((s, i) => {
                 const empty = s.player.equals(ZERO), mine = i === mySeat, picked = ui === "vote" && myVote === i;
@@ -492,15 +562,6 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
         </aside>
       )}
 
-      {roleCard && roleCard.round === round && (
-        <div className={`rolecard ${roleCard.insider ? "ins" : ""}`} role="dialog" aria-label="Your role">
-          <div className="rc-rays" />
-          <span className="rc-kicker">Your role</span>
-          {mySeat >= 0 && <Avatar seat={mySeat} size={96} masked={roleCard.insider} />}
-          <h2>{roleCard.insider ? "Insider" : "Trader"}</h2>
-          <p>{roleCard.insider ? "You see every news shock early. Profit, but do not get caught." : "Someone knows the news early. Watch who trades just before it."}</p>
-        </div>
-      )}
       {toast && <div className="toast" role="status">{toast}</div>}
     </main>
   );

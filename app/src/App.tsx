@@ -12,7 +12,12 @@ export default function App() {
     const n = Number(location.hash.slice(1)) - 1;
     return location.hash.length > 1 && n >= 0 && n < TABLES ? n : null;
   });
-  const setOpen = (i: number | null) => { history.replaceState(null, "", i === null ? location.pathname : `#${i + 1}`); setOpenState(i); };
+  const [autoSit, setAutoSit] = useState(false);
+  const setOpen = (i: number | null, auto = false) => {
+    setAutoSit(i !== null && auto);
+    history.replaceState(null, "", i === null ? location.pathname : `#${i + 1}`);
+    setOpenState(i);
+  };
   const [lat, setLat] = useState<number[]>([]);
 
   useEffect(() => {
@@ -44,8 +49,8 @@ export default function App() {
   return (
     <div className="app">
       {open === null
-        ? <Lobby session={session} onOpen={setOpen} />
-        : <TableView key={open} session={session} index={open} median={median} onLeave={() => setOpen(null)} onLatency={(ms) => setLat((l) => [...l.slice(-19), ms])} />}
+        ? <Lobby session={session} onOpen={(i) => setOpen(i, false)} onPlay={(i) => setOpen(i, true)} />
+        : <TableView key={open} session={session} index={open} autoSit={autoSit} median={median} onLeave={() => setOpen(null, false)} onLatency={(ms) => setLat((l) => [...l.slice(-19), ms])} />}
     </div>
   );
 }
@@ -61,7 +66,7 @@ function status(t: Table, now: number): Status {
 }
 const joinable = (t: Table | null | undefined) => !!t && (t.phase === 0 || t.phase === 3) && t.seats.some((s) => s.player.equals(ZERO));
 
-function Lobby({ session, onOpen }: { session: Session; onOpen: (i: number) => void }) {
+function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: number) => void; onPlay: (i: number) => void }) {
   const [tables, setTables] = useState<(Table | null)[]>([]);
   const [now, setNow] = useState(Date.now() / 1000);
   useEffect(() => {
@@ -77,6 +82,14 @@ function Lobby({ session, onOpen }: { session: Session; onOpen: (i: number) => v
 
   const quick = tables.findIndex(joinable);
   const liveIdx = tables.findIndex((t) => t?.phase === 2 && t.tStart.toNumber() + ROUND_SECS > now);
+  const soonestIdx = tables.reduce((best, t, i) => {
+    if (!t || t.phase !== 2) return best;
+    const end = t.tStart.toNumber() + ROUND_SECS + 15;
+    if (best < 0) return i;
+    const bestEnd = tables[best]!.tStart.toNumber() + ROUND_SECS + 15;
+    return end < bestEnd ? i : best;
+  }, -1);
+  const playIdx = quick >= 0 ? quick : soonestIdx >= 0 ? soonestIdx : Math.max(0, liveIdx);
 
   return (
     <main className="lobby">
@@ -93,8 +106,8 @@ function Lobby({ session, onOpen }: { session: Session; onOpen: (i: number) => v
         <h1>Someone on this floor already knows the news.</h1>
         <p>Six traders. One live SOL price. Sixty seconds. One of you is secretly tipped off before every shock. Trade, then vote out the insider.</p>
         <div className="cta">
-          <button className="btn gold big" disabled={!tables.length} onClick={() => onOpen(quick >= 0 ? quick : Math.max(0, liveIdx))}>
-            <Icon name="play" size={22} />{quick >= 0 ? "Play now" : "Watch a round"}
+          <button className="btn gold big" disabled={!tables.length} onClick={() => onPlay(playIdx)}>
+            <Icon name="play" size={22} />Play now
           </button>
           <span className="muted small">No wallet. No fees. Bots fill empty seats.</span>
         </div>
