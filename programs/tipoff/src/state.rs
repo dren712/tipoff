@@ -156,3 +156,26 @@ pub struct Ledger {
     pub last_round: u64,
     pub last_digest: [u8; 32],
 }
+
+pub const BOARD_LEN: usize = 50;
+pub const BOARD_TABLES: usize = 8;
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
+pub struct Entry {
+    pub player: Pubkey,
+    pub score: i64,
+    pub rounds: u32,
+    pub caught: u16,
+    pub escapes: u16,
+    pub streak: u16,
+    pub best: u16,
+}
+
+/// Shared career board written on the rollup (`post_round`) and committed to Solana (`commit_board`).
+#[account]
+#[derive(InitSpace)]
+pub struct Board {
+    pub bump: u8,
+    pub posted: [u64; BOARD_TABLES],
+    pub entries: [Entry; BOARD_LEN],
+}

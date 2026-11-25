@@ -5,8 +5,8 @@ import anchor from "@coral-xyz/anchor";
 import { Transaction } from "@solana/web3.js";
 import crypto from "crypto";
 import {
-  FIRST_TABLE, PID, SEATS, TEE_VALIDATOR, base, ledgerPda, loadAdmin, perm, program, seatPda, secretPda,
-  send, sleep, tablePda, teeConn,
+  FIRST_TABLE, PID, SEATS, TEE_VALIDATOR, base, boardPda, ledgerPda, loadAdmin, perm, program, seatPda,
+  secretPda, send, sleep, tablePda, teeConn,
 } from "./lib.js";
 
 const admin = loadAdmin();
@@ -17,6 +17,12 @@ const count = Number(process.argv[2] ?? 4);
 
 if (!(await base.getAccountInfo(ledgerPda())))
   await send(base, await pb.methods.initLedger().accounts({ payer: admin.publicKey }).transaction(), [admin], "init_ledger");
+const board = boardPda();
+const boardInfo = await base.getAccountInfo(board);
+if (!boardInfo)
+  await send(base, await pb.methods.initBoard().accounts({ payer: admin.publicKey }).transaction(), [admin], "init_board");
+if (!boardInfo || boardInfo.owner.equals(PID))
+  await send(base, await pb.methods.delegateBoard().accountsPartial({ payer: admin.publicKey, validator: TEE_VALIDATOR }).transaction(), [admin], "delegate_board");
 
 for (let n = 0; n < count; n++) {
   const id = FIRST_TABLE + n;

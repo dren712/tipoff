@@ -157,6 +157,23 @@ async function step(t: T) {
     }
     const sig = await send(er, await tx(pe.methods.checkpoint().accountsPartial({ payer: admin.publicKey, table: t.key, authority: admin.publicKey })), [admin]);
     console.log(`table ${t.id} round ${round} checkpoint ${sig}`);
+    let mask = 0;
+    for (let i = 0; i < SEATS; i++) {
+      const x = s.seats[i];
+      if (!x.player.equals(zero) && !botAt(t, x.player)) mask |= 1 << i;
+    }
+    try {
+      const postSig = await send(er, await tx(pe.methods.postRound(mask).accountsPartial({ authority: admin.publicKey, table: t.key })), [admin]);
+      console.log(`table ${t.id} round ${round} post_round ${postSig}`);
+    } catch (e) {
+      console.log(`table ${t.id} round ${round} post_round failed: ${String(e).slice(0, 160)}`);
+    }
+    try {
+      const commitSig = await send(er, await tx(pe.methods.commitBoard().accountsPartial({ payer: admin.publicKey, table: t.key, authority: admin.publicKey })), [admin]);
+      console.log(`table ${t.id} round ${round} commit_board ${commitSig}`);
+    } catch (e) {
+      console.log(`table ${t.id} round ${round} commit_board failed: ${String(e).slice(0, 160)}`);
+    }
     return;
   }
   const since = s.phase === 3 ? now() - s.settledAt.toNumber() : 1e9;
