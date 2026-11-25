@@ -136,8 +136,8 @@ export class Scene3D {
       const near = z > 0, ph = near ? 1.1 : 4;
       for (const x of [-6.1, 6.1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.3, ph, 0.3), m); post.position.set(x, ph / 2, z); gate.add(post); }
       const top = new THREE.Mesh(new THREE.BoxGeometry(12.5, near ? 0.12 : 0.3, 0.3), m); top.position.set(0, near ? 0.06 : 4, z); gate.add(top);
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.1), label(text, "#" + new THREE.Color(hex).getHexString()));
-      if (near) { sign.rotation.x = -Math.PI / 2; sign.position.set(0, 0.03, 8.75); sign.scale.setScalar(0.8); } else sign.position.set(0, 4.85, z);
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 1.0), label(text, "#" + new THREE.Color(hex).getHexString()));
+      if (near) { sign.rotation.x = -Math.PI / 2; sign.position.set(0, 0.03, 8.75); sign.scale.setScalar(0.8); } else sign.position.set(0, 4.65, z);
       gate.add(sign);
     }
     const pivot = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 2.4, 13, 6), metal);
@@ -162,10 +162,10 @@ export class Scene3D {
     this.wallTex = new THREE.CanvasTexture(this.wallCanvas);
     this.wallTex.colorSpace = THREE.SRGBColorSpace;
     this.wallMat = new THREE.MeshBasicMaterial({ map: this.wallTex, toneMapped: false });
-    const wall = new THREE.Mesh(new THREE.PlaneGeometry(18, 7.9), this.wallMat);
-    wall.position.set(0, 8.7, -13);
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(18.5, 8.4, 0.5), metal);
-    frame.position.set(0, 8.7, -13.3);
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(13.8, 6.0), this.wallMat);
+    wall.position.set(0, 7.6, -12.6);
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(14.3, 6.5, 0.5), metal);
+    frame.position.set(0, 7.6, -12.9);
     this.scene.add(wall, frame);
 
     // The Vault: the TEE, where the insider's name and the news are sealed.
@@ -373,40 +373,40 @@ export class Scene3D {
     c.fillRect(0, 0, W, H);
     const up = w.price >= w.open, usd = (p: number) => (p / 1e8).toFixed(2);
     c.textBaseline = "top";
-    const x0 = 50, x1 = W - 110, y0 = 50, y1 = H - 60, X = (t: number) => x0 + (t / 60) * (x1 - x0);
+    const x0 = 54, x1 = W - 126, y0 = 50, y1 = H - 62, X = (t: number) => x0 + (t / 60) * (x1 - x0);
     const ps = [...w.points.map((p) => p.p), ...w.marks.map((m) => m.p), w.open || w.price].filter(Boolean);
     let lo = Math.min(...ps), hi = Math.max(...ps);
     const pad = Math.max((hi - lo) * 0.15, (w.open || 1) * 0.004);
     lo -= pad; hi += pad;
     const Y = (p: number) => y1 - ((p - lo) / (hi - lo)) * (y1 - y0);
-    c.strokeStyle = "#141c2b";
+    c.strokeStyle = "#182236";
     c.lineWidth = 2;
     for (let t = 0; t <= 60; t += 10) { c.beginPath(); c.moveTo(X(t), y0); c.lineTo(X(t), y1); c.stroke(); }
-    c.fillStyle = "#4b5875";
-    c.font = "600 22px Inter, system-ui, sans-serif";
-    for (let t = 0; t <= 60; t += 10) c.fillText(`${t}s`, X(t) - 12, y1 + 12);
+    c.fillStyle = "#8a98bd";
+    c.font = "700 26px Inter, system-ui, sans-serif";
+    for (let t = 0; t <= 60; t += 10) c.fillText(`${t}s`, X(t) - 14, y1 + 12);
     if (ps.length) {
-      c.fillText(usd(hi), x1 + 14, y0 - 6);
-      c.fillText(usd(lo), x1 + 14, y1 - 22);
-      if (w.open) { c.setLineDash([8, 10]); c.strokeStyle = "#33405c"; c.beginPath(); c.moveTo(x0, Y(w.open)); c.lineTo(x1, Y(w.open)); c.stroke(); c.setLineDash([]); }
+      c.fillText(usd(hi), x1 + 14, y0 - 8);
+      c.fillText(usd(lo), x1 + 14, y1 - 24);
+      if (w.open) { c.setLineDash([8, 10]); c.strokeStyle = "#415278"; c.beginPath(); c.moveTo(x0, Y(w.open)); c.lineTo(x1, Y(w.open)); c.stroke(); c.setLineDash([]); }
     }
     for (const s of w.shocks) {
       c.strokeStyle = c.fillStyle = s.bps > 0 ? "#3ddc97" : "#ff6b6b";
-      c.lineWidth = 3;
+      c.lineWidth = 3.5;
       c.setLineDash([10, 8]); c.beginPath(); c.moveTo(X(s.at), y0); c.lineTo(X(s.at), y1); c.stroke(); c.setLineDash([]);
-      c.font = "800 24px Inter, system-ui, sans-serif";
-      c.fillText(`NEWS ${s.bps > 0 ? "+" : "−"}${(Math.abs(s.bps) / 100).toFixed(1)}%`, X(s.at) + 8, y0 + 4);
+      c.font = "800 28px Inter, system-ui, sans-serif";
+      c.fillText(`NEWS ${s.bps > 0 ? "+" : "−"}${(Math.abs(s.bps) / 100).toFixed(1)}%`, X(s.at) + 8, y0 + 2);
     }
     for (const s of w.future) {
       c.strokeStyle = c.fillStyle = "#f5b83d";
-      c.lineWidth = 3;
+      c.lineWidth = 3.5;
       c.setLineDash([4, 10]); c.beginPath(); c.moveTo(X(s.at), y0); c.lineTo(X(s.at), y1); c.stroke(); c.setLineDash([]);
-      c.font = "800 24px Inter, system-ui, sans-serif";
-      c.fillText(`TIP ${s.bps > 0 ? "+" : "−"}${(Math.abs(s.bps) / 100).toFixed(1)}%`, X(s.at) + 8, y1 - 34);
+      c.font = "800 28px Inter, system-ui, sans-serif";
+      c.fillText(`TIP ${s.bps > 0 ? "+" : "−"}${(Math.abs(s.bps) / 100).toFixed(1)}%`, X(s.at) + 8, y1 - 36);
     }
     if (w.points.length > 1) {
       c.lineJoin = "round";
-      c.lineWidth = 6;
+      c.lineWidth = 7;
       c.strokeStyle = up ? "#3ddc97" : "#ff6b6b";
       c.shadowColor = c.strokeStyle;
       c.shadowBlur = 18;
@@ -463,19 +463,16 @@ export class Scene3D {
     let fov = 50;
     if (this.orbit) { this.camPos.set(Math.sin(t * 0.08) * 20 * a, 7.5, Math.cos(t * 0.08) * 20 * a); this.camLook.set(0, 2.5, -2); }
     else if (stage === "live") {
-      const last = v!.wall.elapsed >= 50, z = me ? Math.max(0, me.root.position.z) * 0.12 : 0;
+      const last = v!.wall.elapsed >= 50, z = me ? Math.max(0, me.root.position.z) * 0.08 : 0;
       if (portrait) {
-        this.camPos.set(0, last ? 10.2 : 10.6, Math.max(19.4, 7.0 / Math.max(0.5, aspect) + 12.6) + z * 0.6);
-        this.camLook.set(0, 2.0, -0.5);
         fov = last ? 60 : 58;
-      } else if (last) {
-        this.camPos.set(meX * 0.35, 12.2, 25.0 * a + z);
-        this.camLook.set(0, 1.4, 0.5);
-        fov = 56;
+        const minZ = 9.5 + 11.7 / Math.max(0.5, aspect);
+        this.camPos.set(0, last ? 10.2 : 10.6, Math.max(19.4, minZ) + z * 0.6);
+        this.camLook.set(0, 2.0, -0.5);
       } else {
-        this.camPos.set(meX * 0.35, 13.2, 26.5 * a + z);
-        this.camLook.set(meX * 0.2, 1.5, 0.5);
-        fov = 52;
+        this.camPos.set(meX * 0.12, 6.9, 22.8 + z);
+        this.camLook.set(meX * 0.08, 2.15, -0.5);
+        fov = last ? 44 : 43;
       }
     } else if (stage === "deal" && me) { this.camPos.set(meX + 1.6, 2.1, -4.6 * a); this.camLook.set(meX, 1.5, 0); }
     else if (stage === "vote" || stage === "drum") {
