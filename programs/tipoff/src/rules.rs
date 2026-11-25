@@ -14,21 +14,29 @@ pub const MAX_POS: i8 = 5;
 pub const LOT: i64 = 1_000_000_000;
 pub const ACCUSE_WIN: i64 = 100_000_000;
 pub const ACCUSE_LOSS: i64 = 50_000_000;
+pub const ALLIN_WIN: i64 = 200_000_000;
+pub const ALLIN_LOSS: i64 = 150_000_000;
 pub const CAUGHT_FINE: i64 = 100_000_000;
+pub const BLOWN_TIP: i64 = 50_000_000;
+pub const RUMOUR_LEAD: i64 = 5;
+pub const CONVICTION: u8 = 8;
 pub const LEVERAGE: i64 = 12;
 pub const MAX_SWING_BPS: i64 = 600;
 
 pub struct Draw {
     pub insider: u8,
     pub shocks: [Shock; SHOCKS],
+    pub rumours: [i8; SHOCKS],
 }
 
-/// Derives the insider and the shocks from the hidden salt. One shock lands in each
+/// Derives the insider, shocks, and rumours from the hidden salt. One shock lands in each
 /// 12-second window from 8 s to 56 s: windows 1-2 move 0.8% to 2.5%, window 3 moves
-/// 1.2% to 3.75% (1.5x), and window 4 moves 1.6% to 5.0% (2x), up or down.
+/// 1.2% to 3.75% (1.5x), and window 4 moves 1.6% to 5.0% (2x), up or down. Each rumour
+/// matches the true shock direction when `h[17 + i] % 3 != 0` (~2/3 of the time).
 pub fn draw_round(salt: &[u8; 32]) -> Draw {
     let h = hashv(&[b"tipoff-draw", &salt[..]]).to_bytes();
     let mut shocks = [Shock::default(); SHOCKS];
+    let mut rumours = [0i8; SHOCKS];
     for (i, s) in shocks.iter_mut().enumerate() {
         let b = &h[1 + i * 4..5 + i * 4];
         let raw = 80 + (u16::from_le_bytes([b[1], b[2]]) % 171) as i16;
@@ -39,8 +47,10 @@ pub fn draw_round(salt: &[u8; 32]) -> Draw {
         };
         s.at = 8 + (i as u8) * 12 + b[0] % 12;
         s.bps = if b[3] & 1 == 0 { size } else { -size };
+        let dir = if s.bps > 0 { 1i8 } else { -1i8 };
+        rumours[i] = if h[17 + i] % 3 != 0 { dir } else { -dir };
     }
-    Draw { insider: h[0] % SEATS as u8, shocks }
+    Draw { insider: h[0] % SEATS as u8, shocks, rumours }
 }
 
 /// Applies the `LEVERAGE`x oracle move from `open_price`, clamped to `+-MAX_SWING_BPS`.
@@ -88,15 +98,30 @@ pub struct Outcome {
     pub scores: [i64; SEATS],
 }
 
+/// Decodes a vote byte into `(seat, is_all_in)`.
+/// `0..SEATS` are normal accusations; `CONVICTION..CONVICTION+SEATS` are all-in; all others are no vote.
+pub fn decode_vote(v: u8) -> Option<(u8, bool)> {
+    if (v as usize) < SEATS {
+        Some((v, false))
+    } else if v >= CONVICTION && ((v - CONVICTION) as usize) < SEATS {
+        Some((v - CONVICTION, true))
+    } else {
+        None
+    }
+}
+
 /// The insider is caught when they hold the most votes outright, with at least two.
 /// Caught: their profit is split between the correct accusers and they pay a fine.
-/// Not caught: their profit doubles. Accusers gain or lose a fixed stake on their vote.
+/// Not caught: positive profit doubles; zero or negative profit incurs `BLOWN_TIP`.
+/// Accusers gain or lose a fixed stake based on normal vs all-in (`CONVICTION`) vote.
 pub fn score_round(insider: u8, votes: &[u8; SEATS], pnl: &[i64; SEATS]) -> Outcome {
     let k = insider as usize;
     let mut tally = [0u8; SEATS];
     for (i, v) in votes.iter().enumerate() {
-        if i != k && (*v as usize) < SEATS {
-            tally[*v as usize] += 1;
+        if i != k {
+            if let Some((target, _)) = decode_vote(*v) {
+                tally[target as usize] += 1;
+            }
         }
     }
     let caught = tally[k] >= 2 && tally.iter().enumerate().all(|(i, n)| i == k || *n < tally[k]);
@@ -106,22 +131,27 @@ pub fn score_round(insider: u8, votes: &[u8; SEATS], pnl: &[i64; SEATS]) -> Outc
         if i == k {
             continue;
         }
-        if votes[i] == insider {
-            scores[i] = scores[i].saturating_add(ACCUSE_WIN);
-        } else if (votes[i] as usize) < SEATS {
-            scores[i] = scores[i].saturating_sub(ACCUSE_LOSS);
+        let Some((target, all_in)) = decode_vote(votes[i]) else {
+            continue;
+        };
+        if target == insider {
+            scores[i] = scores[i].saturating_add(if all_in { ALLIN_WIN } else { ACCUSE_WIN });
+        } else {
+            scores[i] = scores[i].saturating_sub(if all_in { ALLIN_LOSS } else { ACCUSE_LOSS });
         }
     }
     let profit = pnl[k].max(0);
     if caught {
         scores[k] = pnl[k].min(0).saturating_sub(CAUGHT_FINE);
         for i in 0..SEATS {
-            if i != k && votes[i] == insider {
+            if i != k && matches!(decode_vote(votes[i]), Some((t, _)) if t == insider) {
                 scores[i] = scores[i].saturating_add(profit / correct);
             }
         }
-    } else {
+    } else if pnl[k] > 0 {
         scores[k] = pnl[k].saturating_add(profit);
+    } else {
+        scores[k] = pnl[k].saturating_sub(BLOWN_TIP);
     }
     Outcome { caught, scores }
 }
@@ -398,7 +428,7 @@ mod tests {
         let neg_pnl = [-500, 100, -200, 0, 50, -50];
         let o_neg = score_round(0, &[NONE; SEATS], &neg_pnl);
         assert!(!o_neg.caught);
-        assert_eq!(o_neg.scores, neg_pnl);
+        assert_eq!(o_neg.scores, [-500 - BLOWN_TIP, 100, -200, 0, 50, -50]);
 
         // Everyone votes for the insider (all 5 non-insiders): caught, profit split 5 ways.
         let pnl_all = [10, 20, 1_000_000, 30, 40, 50];
@@ -461,14 +491,14 @@ mod tests {
         assert_eq!(sum_out, expected);
         assert_eq!(sum_out - (sum_in - CAUGHT_FINE + 3 * ACCUSE_WIN - ACCUSE_LOSS), -1);
 
-        // Escaped negative-profit insider: zero profit, zero chips created or lost beyond stakes.
+        // Escaped negative-profit insider: incurs BLOWN_TIP penalty plus vote stakes.
         let pnl2 = [-333, 50, -25, 0, 10, 90];
         let votes2 = [NONE, 0, 2, 3, NONE, NONE];
         let o2 = score_round(0, &votes2, &pnl2);
         assert!(!o2.caught);
         let sum2_in: i64 = pnl2.iter().sum();
         let sum2_out: i64 = o2.scores.iter().sum();
-        assert_eq!(sum2_out, sum2_in + ACCUSE_WIN - 2 * ACCUSE_LOSS);
+        assert_eq!(sum2_out, sum2_in - BLOWN_TIP + ACCUSE_WIN - 2 * ACCUSE_LOSS);
 
         // Zero-profit caught insider still pays fine; accusers get ACCUSE_WIN + 0.
         let o_zero = score_round(0, &[NONE, 0, 0, NONE, NONE, NONE], &[0; SEATS]);
@@ -575,5 +605,78 @@ mod tests {
                 Shock { at: 51, bps: -240 },
             ]
         );
+    }
+
+    #[test]
+    fn rumours_are_deterministic_and_roughly_two_thirds_true() {
+        let mut true_count = 0usize;
+        let total_shocks = 3_000 * SHOCKS;
+        for n in 0u32..3_000 {
+            let salt = hashv(&[b"rumour-dist", &n.to_le_bytes()]).to_bytes();
+            let d = draw_round(&salt);
+            assert_eq!(d.rumours, draw_round(&salt).rumours);
+            for i in 0..SHOCKS {
+                assert!(d.rumours[i] == 1 || d.rumours[i] == -1);
+                if d.rumours[i].signum() == (d.shocks[i].bps.signum() as i8) {
+                    true_count += 1;
+                }
+            }
+        }
+        let pct = true_count * 100 / total_shocks;
+        assert!((60..=73).contains(&pct), "true_count={true_count}/{total_shocks} ({pct}%)");
+    }
+
+    #[test]
+    fn all_in_votes_and_invalid_vote_bytes() {
+        // Votes 8..=13 map to seats 0..=5 all-in; 6, 7, 14, 254 are no vote.
+        for s in 0..SEATS as u8 {
+            assert_eq!(decode_vote(s), Some((s, false)));
+            assert_eq!(decode_vote(CONVICTION + s), Some((s, true)));
+        }
+        for bad in [6u8, 7, 14, 254, NONE] {
+            assert_eq!(decode_vote(bad), None);
+        }
+
+        // Insider is seat 0 (+900 pnl). Seats 1 (normal) and 2 (all-in) accuse 0 -> caught.
+        // Seat 3 votes all-in wrong (seat 4 = 12), seat 4 votes invalid 6/7/14/254 checks.
+        let pnl = [900, 10, 20, 30, 40, 50];
+        let o = score_round(0, &[NONE, 0, CONVICTION, CONVICTION + 4, 6, 14], &pnl);
+        assert!(o.caught);
+        assert_eq!(o.scores[0], -CAUGHT_FINE);
+        assert_eq!(o.scores[1], 10 + ACCUSE_WIN + 450);
+        assert_eq!(o.scores[2], 20 + ALLIN_WIN + 450);
+        assert_eq!(o.scores[3], 30 - ALLIN_LOSS);
+        assert_eq!(o.scores[4], 40);
+        assert_eq!(o.scores[5], 50);
+
+        // Uncaught with invalid vote values 7 and 254 ignored.
+        let o2 = score_round(0, &[NONE, 7, 254, CONVICTION + 1, NONE, NONE], &[100; SEATS]);
+        assert!(!o2.caught);
+        assert_eq!(o2.scores[1], 100);
+        assert_eq!(o2.scores[2], 100);
+        assert_eq!(o2.scores[3], 100 - ALLIN_LOSS);
+    }
+
+    #[test]
+    fn blown_tip_applies_only_to_uncaught_non_positive_insider() {
+        // Uncaught with 0 profit -> -BLOWN_TIP
+        let o_zero = score_round(1, &[NONE; SEATS], &[0; SEATS]);
+        assert!(!o_zero.caught);
+        assert_eq!(o_zero.scores[1], -BLOWN_TIP);
+
+        // Uncaught with negative profit -> pnl - BLOWN_TIP
+        let o_neg = score_round(1, &[NONE; SEATS], &[0, -25_000_000, 0, 0, 0, 0]);
+        assert!(!o_neg.caught);
+        assert_eq!(o_neg.scores[1], -25_000_000 - BLOWN_TIP);
+
+        // Uncaught with positive profit -> doubles, no BLOWN_TIP
+        let o_pos = score_round(1, &[NONE; SEATS], &[0, 40_000_000, 0, 0, 0, 0]);
+        assert!(!o_pos.caught);
+        assert_eq!(o_pos.scores[1], 80_000_000);
+
+        // Caught with zero or negative profit -> CAUGHT_FINE only, no BLOWN_TIP
+        let o_caught = score_round(1, &[1, NONE, 1, NONE, NONE, NONE], &[0, -25_000_000, 0, 0, 0, 0]);
+        assert!(o_caught.caught);
+        assert_eq!(o_caught.scores[1], -25_000_000 - CAUGHT_FINE);
     }
 }

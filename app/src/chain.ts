@@ -19,7 +19,11 @@ export const FIRST_TABLE = 7100;
 export const TABLES = 4;
 export const LOT = 1e9;
 export const LEVERAGE = 12;
+export const CONVICTION = 8;
 export const ZERO = PublicKey.default;
+
+export const isRumour = (s: Pick<Shock, "bps">) => Math.abs(s.bps) === 1;
+export const voteSeat = (v: number) => (v <= 5 || (v >= 8 && v <= 13) ? v % 8 : NONE);
 
 const pda = (...s: (Uint8Array | Buffer)[]) => PublicKey.findProgramAddressSync(s, PID)[0];
 export const tablePda = (id: number) => pda(Buffer.from("table"), new BN(id).toArrayLike(Buffer, "le", 8));
@@ -128,7 +132,7 @@ export function equity(seat: Seat, price: number, open: number): number {
 /// does (`rules.rs::draw_round`), so anyone can check the insider and shocks were not changed.
 /// Test vector (salt = [0..32]): insider = 0, shocks =
 /// [{ at: 10, bps: 249 }, { at: 31, bps: -171 }, { at: 43, bps: -319 }, { at: 51, bps: -240 }].
-export async function redraw(saltBytes: number[]): Promise<{ insider: number; shocks: Shock[] }> {
+export async function redraw(saltBytes: number[]): Promise<{ insider: number; shocks: Shock[]; rumours: number[] }> {
   const data = new Uint8Array([...new TextEncoder().encode("tipoff-draw"), ...saltBytes]);
   const h = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
   const shocks = Array.from({ length: 4 }, (_, i) => {
@@ -137,7 +141,11 @@ export async function redraw(saltBytes: number[]): Promise<{ insider: number; sh
     const size = i === 2 ? Math.trunc((raw * 3) / 2) : i === 3 ? raw * 2 : raw;
     return { at: 8 + i * 12 + (b[0] % 12), bps: b[3] & 1 ? -size : size };
   });
-  return { insider: h[0] % SEATS, shocks };
+  const rumours = shocks.map((s, i) => {
+    const dir = s.bps > 0 ? 1 : -1;
+    return h[17 + i] % 3 !== 0 ? dir : -dir;
+  });
+  return { insider: h[0] % SEATS, shocks, rumours };
 }
 
 export const short = (k: PublicKey | string) => { const s = k.toString(); return `${s.slice(0, 4)}…${s.slice(-4)}`; };

@@ -2,8 +2,8 @@ use anchor_lang::prelude::Pubkey;
 use proptest::prelude::*;
 use solana_sha256_hasher::hashv;
 use tipoff::rules::{
-    apply_trade, draw_round, equity, levered, score_round, shocked, ACCUSE_LOSS, ACCUSE_WIN,
-    CAUGHT_FINE, MAX_POS, MAX_SWING_BPS, ROUND_SECS,
+    apply_trade, decode_vote, draw_round, equity, levered, score_round, shocked, ACCUSE_LOSS,
+    ACCUSE_WIN, ALLIN_LOSS, ALLIN_WIN, BLOWN_TIP, CAUGHT_FINE, MAX_POS, MAX_SWING_BPS, ROUND_SECS,
 };
 use tipoff::state::{
     Print, Seat, SeatPrivate, Table, NONE, ROLE_INSIDER, SEATS, SHOCKS, TAPE,
@@ -264,7 +264,7 @@ proptest! {
     #[test]
     fn prop_score_round_invariants_and_chip_conservation(
         insider in 0u8..(SEATS as u8),
-        votes in prop::array::uniform6(0u8..=255u8),
+        votes in prop::array::uniform6(prop_oneof![0u8..=15u8, Just(254u8), Just(255u8)]),
         pnl in prop::array::uniform6(-1_000_000_000_000i64..=1_000_000_000_000i64),
     ) {
         let out1 = score_round(insider, &votes, &pnl);
@@ -274,12 +274,16 @@ proptest! {
 
         let k = insider as usize;
         let mut tally = [0u8; SEATS];
-        let mut wrong_votes = 0i64;
+        let mut vote_net = 0i128;
         for (i, &v) in votes.iter().enumerate() {
-            if i != k && (v as usize) < SEATS {
-                tally[v as usize] += 1;
-                if v != insider {
-                    wrong_votes += 1;
+            if i != k {
+                if let Some((target, all_in)) = decode_vote(v) {
+                    tally[target as usize] += 1;
+                    if target == insider {
+                        vote_net += if all_in { ALLIN_WIN } else { ACCUSE_WIN } as i128;
+                    } else {
+                        vote_net -= if all_in { ALLIN_LOSS } else { ACCUSE_LOSS } as i128;
+                    }
                 }
             }
         }
@@ -293,14 +297,20 @@ proptest! {
             if i == k {
                 if expected_caught {
                     prop_assert_eq!(out1.scores[k], pnl[k].min(0) - CAUGHT_FINE);
-                } else {
+                } else if pnl[k] > 0 {
                     prop_assert_eq!(out1.scores[k], pnl[k] + insider_profit);
+                } else {
+                    prop_assert_eq!(out1.scores[k], pnl[k] - BLOWN_TIP);
                 }
-            } else if votes[i] == insider {
-                let bonus = if expected_caught { insider_profit / correct_votes } else { 0 };
-                prop_assert_eq!(out1.scores[i], pnl[i] + ACCUSE_WIN + bonus);
-            } else if (votes[i] as usize) < SEATS {
-                prop_assert_eq!(out1.scores[i], pnl[i] - ACCUSE_LOSS);
+            } else if let Some((target, all_in)) = decode_vote(votes[i]) {
+                if target == insider {
+                    let stake = if all_in { ALLIN_WIN } else { ACCUSE_WIN };
+                    let bonus = if expected_caught { insider_profit / correct_votes } else { 0 };
+                    prop_assert_eq!(out1.scores[i], pnl[i] + stake + bonus);
+                } else {
+                    let loss = if all_in { ALLIN_LOSS } else { ACCUSE_LOSS };
+                    prop_assert_eq!(out1.scores[i], pnl[i] - loss);
+                }
             } else {
                 prop_assert_eq!(out1.scores[i], pnl[i]);
             }
@@ -309,8 +319,6 @@ proptest! {
         // Chip conservation: exact sum matches documented stakes and payouts minus integer split remainder.
         let sum_pnl: i128 = pnl.iter().map(|&x| x as i128).sum();
         let sum_scores: i128 = out1.scores.iter().map(|&x| x as i128).sum();
-        let vote_net = (correct_votes as i128) * (ACCUSE_WIN as i128)
-            - (wrong_votes as i128) * (ACCUSE_LOSS as i128);
         if expected_caught {
             let distributed = (correct_votes as i128) * ((insider_profit / correct_votes) as i128);
             let remainder = (insider_profit as i128) - distributed;
@@ -318,7 +326,8 @@ proptest! {
             let expected_sum = sum_pnl + vote_net - (CAUGHT_FINE as i128) - remainder;
             prop_assert_eq!(sum_scores, expected_sum);
         } else {
-            let expected_sum = sum_pnl + vote_net + (insider_profit as i128);
+            let insider_delta = if pnl[k] > 0 { insider_profit as i128 } else { -(BLOWN_TIP as i128) };
+            let expected_sum = sum_pnl + vote_net + insider_delta;
             prop_assert_eq!(sum_scores, expected_sum);
         }
     }

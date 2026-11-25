@@ -72,7 +72,7 @@ function suspect(s: any, me: number): number {
   for (let k = 0; k < n; k++) {
     const p = s.tape[k];
     for (const sh of s.shocks) {
-      if (!sh.bps) continue;
+      if (!sh.bps || Math.abs(sh.bps) <= 1) continue;
       const lead = sh.at - p.t;
       if (lead > 0 && lead <= 9 && Math.sign(p.delta) === Math.sign(sh.bps)) score[p.seat] += Math.abs(p.delta) * 0.5;
       if (lead > 0 && lead <= 9 && Math.sign(p.delta) !== Math.sign(sh.bps)) score[p.seat] -= Math.abs(p.delta) * 0.25;
@@ -99,7 +99,7 @@ async function playBot(t: T, b: Bot, s: any, elapsed: number) {
       if (next && next.at - elapsed < rnd(4, 12) && Math.random() < 0.75) d = Math.sign(next.bps) * rnd(1, 3) - seat.pos * 0.4;
       else if (Math.random() < 0.3) d = rnd(-1.4, 1.4);
     } else {
-      const last = [...s.shocks].filter((x: any) => x.bps && x.at <= elapsed).pop();
+      const last = [...s.shocks].filter((x: any) => x.bps && Math.abs(x.bps) > 1 && x.at <= elapsed).pop();
       const fresh = last && elapsed - last.at < 6;
       if (b.style === "momentum" && fresh) d = Math.sign(last.bps) * rnd(1, 3);
       else if (b.style === "fade" && fresh) d = -Math.sign(last.bps) * rnd(1, 3);
