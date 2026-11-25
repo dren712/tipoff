@@ -334,7 +334,7 @@ export class Scene3D {
     if (!this.ready) return;
     const changed = prev?.stage !== v.stage;
     if (changed) this.stageAt = this.clock.elapsedTime;
-    this.tiltTo = v.stage === "live" ? THREE.MathUtils.clamp((v.wall.shocks.reduce((a, s) => a + s.bps, 0) / 250) * 2.2, -7, 7) * (Math.PI / 180) : 0;
+    this.tiltTo = v.stage === "live" ? THREE.MathUtils.clamp((v.wall.shocks.reduce((a, s) => a + (Math.abs(s.bps) > 1 ? s.bps : 0), 0) / 250) * 2.2, -7, 7) * (Math.PI / 180) : 0;
     this.nearGate.visible = !this.lined(v.stage);
     this.cage.visible = v.stage === "reveal" && v.caught && !!this.bots[v.insider];
     this.bots.forEach((b, i) => {
@@ -391,6 +391,7 @@ export class Scene3D {
       if (w.open) { c.setLineDash([8, 10]); c.strokeStyle = "#415278"; c.beginPath(); c.moveTo(x0, Y(w.open)); c.lineTo(x1, Y(w.open)); c.stroke(); c.setLineDash([]); }
     }
     for (const s of w.shocks) {
+      if (Math.abs(s.bps) <= 1) continue;
       c.strokeStyle = c.fillStyle = s.bps > 0 ? "#3ddc97" : "#ff6b6b";
       c.lineWidth = 3.5;
       c.setLineDash([10, 8]); c.beginPath(); c.moveTo(X(s.at), y0); c.lineTo(X(s.at), y1); c.stroke(); c.setLineDash([]);

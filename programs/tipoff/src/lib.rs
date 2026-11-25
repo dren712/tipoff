@@ -357,7 +357,7 @@ pub mod tipoff {
         let p = &mut ctx.accounts.seat;
         require!(t.phase == Phase::Live as u8 && now < t.t_start + ROUND_SECS + VOTE_SECS, TipoffError::WrongPhase);
         require!(t.seats[p.idx as usize].signed_by(&ctx.accounts.signer.key()), TipoffError::Unauthorized);
-        require!((suspect as usize) < SEATS && suspect != p.idx, TipoffError::BadSeat);
+        validate_vote(p.idx, suspect)?;
         // One accusation per round, and it is final.
         require!(p.round != t.round || p.vote == NONE, TipoffError::AlreadyVoted);
         p.vote = suspect;
@@ -566,18 +566,28 @@ fn refresh(t: &mut Table, s: &Account<Secret>, feed: &AccountInfo, now: i64) -> 
             t.oracle_price = p;
         }
     }
+    let draw = draw_round(&s.salt);
     let mut bps = 0i32;
     let mut seen = 0u8;
     for (i, sh) in s.shocks.iter().enumerate() {
-        if (sh.at as i64) <= elapsed {
+        let at = sh.at as i64;
+        if at <= elapsed {
             bps += sh.bps as i32;
             seen += 1;
             t.shocks[i] = *sh;
+        } else if elapsed >= at - RUMOUR_LEAD {
+            t.shocks[i] = Shock { at: sh.at, bps: draw.rumours[i] as i16 };
         }
     }
     t.shock_bps = bps;
     t.shocks_seen = seen;
     t.price = market_price(t)?;
+    Ok(())
+}
+
+fn validate_vote(voter_idx: u8, suspect: u8) -> Result<()> {
+    let (target, _) = decode_vote(suspect).ok_or(TipoffError::BadSeat)?;
+    require!(target != voter_idx, TipoffError::BadSeat);
     Ok(())
 }
 
@@ -1033,6 +1043,7 @@ mod tests {
                 Shock { at: 35, bps: 150 },
                 Shock { at: 50, bps: -200 },
             ],
+            rumours: [1, -1, 1, -1],
         };
 
         // Seat 0 receives ROLE_TRADER and zeroed shocks.
@@ -1062,5 +1073,63 @@ mod tests {
         assert_eq!(err_idx, anchor_lang::error::Error::from(TipoffError::BadSeat));
         let err_tbl = load_seat(&ai1, &Pubkey::new_unique(), 1).err().unwrap();
         assert_eq!(err_tbl, anchor_lang::error::Error::from(TipoffError::BadSeat));
+    }
+
+    #[test]
+    fn refresh_publishes_rumour_at_lead_and_replaces_at_hit() {
+        let key = Pubkey::new_unique();
+        let owner = ID;
+        let table_key = Pubkey::new_unique();
+        let salt = [42u8; 32];
+        let draw = draw_round(&salt);
+        let secret_val = Secret {
+            table: table_key,
+            bump: 254,
+            round: 8,
+            salt,
+            insider: draw.insider,
+            shocks: draw.shocks,
+        };
+        let mut s_data = account_data(&secret_val);
+        let mut s_lamports = 1u64;
+        let s_ai = AccountInfo::new(&key, false, false, &mut s_lamports, &mut s_data, &owner, false);
+        let secret_acc: Account<Secret> = Account::try_from(&s_ai).unwrap();
+
+        let feed_key = oracle::SOL_USD_FEED;
+        let feed_owner = oracle::ORACLE_PROGRAM;
+        let mut f_data = vec![0u8; 133];
+        let mut f_lamports = 1u64;
+        let f_ai = AccountInfo::new(&feed_key, false, false, &mut f_lamports, &mut f_data, &feed_owner, false);
+
+        let at0 = draw.shocks[0].at as i64;
+        let mut t = empty_table(8, Phase::Live as u8, 1_000, 150_00000000);
+
+        // Before at - RUMOUR_LEAD: slot 0 is still empty.
+        refresh(&mut t, &secret_acc, &f_ai, 1_000 + at0 - RUMOUR_LEAD - 1).unwrap();
+        assert_eq!(t.shocks[0], Shock::default());
+        assert_eq!(t.shocks_seen, 0);
+
+        // At at - RUMOUR_LEAD: rumour slot appears (+1 or -1) without incrementing shocks_seen or shock_bps.
+        refresh(&mut t, &secret_acc, &f_ai, 1_000 + at0 - RUMOUR_LEAD).unwrap();
+        assert_eq!(t.shocks[0], Shock { at: draw.shocks[0].at, bps: draw.rumours[0] as i16 });
+        assert_eq!(t.shocks[0].bps.abs(), 1);
+        assert_eq!(t.shocks_seen, 0);
+        assert_eq!(t.shock_bps, 0);
+
+        // At at: slot 0 is overwritten with the real shock.
+        refresh(&mut t, &secret_acc, &f_ai, 1_000 + at0).unwrap();
+        assert_eq!(t.shocks[0], draw.shocks[0]);
+        assert_eq!(t.shocks_seen, 1);
+        assert_eq!(t.shock_bps, draw.shocks[0].bps as i32);
+    }
+
+    #[test]
+    fn validate_vote_rejects_self_all_in_and_invalid_bytes() {
+        assert!(validate_vote(2, 0).is_ok());
+        assert!(validate_vote(2, CONVICTION + 5).is_ok());
+        for bad in [2, CONVICTION + 2, 6, 7, 14, 254, NONE] {
+            let err = validate_vote(2, bad).unwrap_err();
+            assert_eq!(err, anchor_lang::error::Error::from(TipoffError::BadSeat));
+        }
     }
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FIRST_TABLE, MAX_POS, NONE, ROUND_SECS, SEATS, Session, Table, SeatPrivate, VOTE_SECS, ZERO, actions, base, equity, explorer,
+  isRumour, voteSeat,
   fetchSeat, fetchTable, ledgerPda, redraw, secretPda, seatPda, short, tablePda,
 } from "./chain";
 import { Chart } from "./Chart";
@@ -72,9 +73,12 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
         if (Object.keys(fresh).length && !first) setPops((o) => ({ ...o, ...fresh }));
         h.seen = next.tapeLen;
         if (next.shocksSeen > h.shocks) {
-          const bps = next.shocks[next.shocksSeen - 1].bps;
-          if (!first) { setFlash({ id: Date.now(), bps }); sfx.news(bps > 0); scene.current?.news(bps); }
-          h.shocks = next.shocksSeen;
+          const sh = next.shocks[next.shocksSeen - 1];
+          if (!isRumour(sh) && Math.abs(sh.bps) > 1) {
+            const bps = sh.bps;
+            if (!first) { setFlash({ id: Date.now(), bps }); sfx.news(bps > 0); scene.current?.news(bps); }
+            h.shocks = next.shocksSeen;
+          }
         }
         if (h.phase === 1) sfx.bell();
       }
@@ -132,7 +136,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
   const seat = t && mySeat >= 0 ? t.seats[mySeat] : null;
   const current = priv && t && priv.round.eq(t.round) ? priv : null;
   const insider = current?.role === 2 && phase === 2;
-  const chainVote = current && current.vote !== NONE ? current.vote : null;
+  const chainVote = current && current.vote !== NONE ? voteSeat(current.vote) : null;
   const myVote = chainVote !== null ? chainVote : voted && voted.round === round ? voted.suspect : null;
   const locked = myVote !== null;
   const price = t?.price.toNumber() ?? 0;
@@ -189,7 +193,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
       seats: t.seats.map((s) => ({ empty: s.player.equals(ZERO), pos: s.pos, mood: phase === 2 ? Math.sign(Math.round(equity(s, price, openPrice))) : 0 })),
       wall: {
         price, open: phase >= 2 ? openPrice : 0, elapsed, round: Number(round), points: hist.current.points, marks: hist.current.marks,
-        shocks: t.shocks.filter((s) => s.bps !== 0 && phase >= 2), future: insider ? current!.shocks.filter((s) => s.at > elapsed) : [],
+        shocks: t.shocks.filter((s) => Math.abs(s.bps) > 1 && phase >= 2), future: insider ? current!.shocks.filter((s) => s.at > elapsed) : [],
         title: st === "idle" ? "TAKE A SEAT" : st === "deal" ? "DEALING SECRET ROLES" : "",
         sub: st === "idle" ? "Bots fill the empty desks. One of the six will be the insider." : st === "deal" ? "MagicBlock VRF is picking the insider inside the private rollup" : "",
       },
@@ -209,7 +213,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
   const nextIn = settled ? Math.max(0, Math.ceil(t.settledAt.toNumber() + 12 - now)) : 0;
   const future = insider ? current!.shocks.filter((s) => s.at > elapsed) : [];
   const nextShock = future[0];
-  const votesFor = (i: number) => (settled && stage >= 1 ? t.votes.filter((v, k) => v === i && k !== t.insider).length : 0);
+  const votesFor = (i: number) => (settled && stage >= 1 ? t.votes.filter((v, k) => voteSeat(v) === i && k !== t.insider).length : 0);
 
   const add = (l: Line) => setProof((p) => [l, ...p].slice(0, 12));
   const cheat = {
@@ -421,7 +425,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
             </div>
             <div className="suspects">
               {ranked.map((i, rank) => {
-                const s = t.seats[i], last = s.last.toNumber() / 1e6, v = t.votes[i], got = votesFor(i);
+                const s = t.seats[i], last = s.last.toNumber() / 1e6, v = voteSeat(t.votes[i]), got = votesFor(i);
                 return (
                   <div key={i} className={`suspect score ${i === t.insider ? "insider" : ""} ${i === mySeat ? "self" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[i] }}>
                     <span className="s-rank">{rank + 1}</span>
@@ -429,7 +433,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
                     <span className="s-name">{SEAT_NAMES[i]}{i === mySeat && <em>You</em>}</span>
                     <span className={`s-pnl num ${last >= 0 ? "up" : "down"}`}>{chips(last)}</span>
                     {got > 0 && <span className="s-votes"><Icon name="gavel" size={12} />{got}</span>}
-                    <span className="s-meta">{i === t.insider ? <b className="s-ins">Insider</b> : v !== NONE && v < SEATS ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[v] }} />{SEAT_NAMES[v]}</> : "no vote"}</span>
+                    <span className="s-meta">{i === t.insider ? <b className="s-ins">Insider</b> : v !== NONE ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[v] }} />{SEAT_NAMES[v]}</> : "no vote"}</span>
                   </div>
                 );
               })}
@@ -450,7 +454,7 @@ export function TableView({ session, index, median, onLeave, onLatency }: { sess
           {side === "tape" ? (
             <div className="drawer-body">
               <div className="chartbox">
-                <Chart points={hist.current.points} marks={hist.current.marks} shocks={t.shocks.filter((s) => s.bps !== 0 && phase >= 2)} future={future} elapsed={elapsed} open={phase >= 2 ? openPrice : 0} colors={SEAT_COLORS} />
+                <Chart points={hist.current.points} marks={hist.current.marks} shocks={t.shocks.filter((s) => Math.abs(s.bps) > 1 && phase >= 2)} future={future} elapsed={elapsed} open={phase >= 2 ? openPrice : 0} colors={SEAT_COLORS} />
               </div>
               <div className="prints">
                 {hist.current.marks.length === 0 && <p className="muted small">Every trade is public and lands here. Look for who moves just before the news.</p>}

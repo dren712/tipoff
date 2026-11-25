@@ -28,7 +28,7 @@ export function Chart({ points, marks, shocks, future, elapsed, open, colors }: 
         return <g key={k}><line x1={L} x2={W - R} y1={y(p)} y2={y(p)} className="gridline" /><text x={W - R + 6} y={y(p) + 4} className="axis">{(p / 1e8).toFixed(2)}</text></g>;
       })}
       {open > 0 && <line x1={L} x2={W - R} y1={y(open)} y2={y(open)} className="openline" />}
-      {shocks.map((s, i) => (
+      {shocks.filter((s) => Math.abs(s.bps) > 1).map((s, i) => (
         <g key={`s${i}`}><line x1={x(s.at)} x2={x(s.at)} y1={T} y2={H - B} className={`shock ${s.bps > 0 ? "upl" : "downl"}`} />
           <text x={x(s.at) + 4} y={T + 10 + (i % 2) * 13} className={`shocklabel ${s.bps > 0 ? "upt" : "downt"}`}>News {label(s)}</text></g>
       ))}
