@@ -30,6 +30,7 @@ export const tablePda = (id: number) => pda(Buffer.from("table"), new BN(id).toA
 export const secretPda = (t: PublicKey) => pda(Buffer.from("secret"), t.toBuffer());
 export const seatPda = (t: PublicKey, i: number) => pda(Buffer.from("seat"), t.toBuffer(), Buffer.from([i]));
 export const ledgerPda = () => pda(Buffer.from("ledger"));
+export const boardPda = () => pda(Buffer.from("board"));
 
 export type Shock = { at: number; bps: number };
 export type Seat = { player: PublicKey; session: PublicKey; pos: number; cash: BN; trades: number; last: BN; score: BN; rounds: number };
@@ -40,6 +41,10 @@ export type Table = {
   tapeLen: number; insider: number; caught: boolean; votes: number[]; shocks: Shock[]; revealedSalt: number[];
 };
 export type SeatPrivate = { table: PublicKey; idx: number; round: BN; role: number; shocks: Shock[]; vote: number };
+export type BoardEntry = {
+  player: PublicKey; score: BN; rounds: number; caught: number; escapes: number; streak: number; best: number;
+};
+export type Board = { bump: number; posted: BN[]; entries: BoardEntry[] };
 
 /// The guest key lives in this browser only. It signs every move, so there are no wallet popups.
 export function guestKey(): Keypair {
@@ -120,6 +125,16 @@ export async function fetchTable(s: Session, key: PublicKey): Promise<Table | nu
 export async function fetchSeat(s: Session, table: PublicKey, i: number): Promise<SeatPrivate | null> {
   const info = await s.conn.getAccountInfo(seatPda(table, i));
   return info ? (s.program.coder.accounts.decode("seatPrivate", info.data) as SeatPrivate) : null;
+}
+
+export async function fetchBoard(s: Session): Promise<Board | null> {
+  const info = await s.conn.getAccountInfo(boardPda()).catch(() => null);
+  if (!info) return null;
+  try {
+    return s.program.coder.accounts.decode("board", info.data) as Board;
+  } catch {
+    return null;
+  }
 }
 
 /// Chips won or lost so far by a seat, with its position marked at the current price.

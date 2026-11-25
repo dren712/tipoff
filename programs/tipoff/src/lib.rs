@@ -44,6 +44,7 @@ pub const SECRET_SEED: &[u8] = b"secret";
 pub const SEAT_SEED: &[u8] = b"seat";
 pub const PLAYER_SEED: &[u8] = b"player";
 pub const LEDGER_SEED: &[u8] = b"ledger";
+pub const BOARD_SEED: &[u8] = b"board";
 const MAX_MEMBERS: usize = 2;
 
 #[ephemeral]
@@ -93,6 +94,11 @@ pub mod tipoff {
         Ok(())
     }
 
+    pub fn init_board(ctx: Context<InitBoard>) -> Result<()> {
+        ctx.accounts.board.bump = ctx.bumps.board;
+        Ok(())
+    }
+
     /// Creates the player's profile and registers the session key that will sign on the rollup.
     pub fn init_player(ctx: Context<InitPlayer>, session: Pubkey) -> Result<()> {
         let p = &mut ctx.accounts.player;
@@ -106,6 +112,15 @@ pub mod tipoff {
         ctx.accounts.delegate_pda(
             &ctx.accounts.payer,
             &[TABLE_SEED, &id.to_le_bytes()],
+            cfg(&ctx.accounts.validator),
+        )?;
+        Ok(())
+    }
+
+    pub fn delegate_board(ctx: Context<DelegateBoard>) -> Result<()> {
+        ctx.accounts.delegate_pda(
+            &ctx.accounts.payer,
+            &[BOARD_SEED],
             cfg(&ctx.accounts.validator),
         )?;
         Ok(())
@@ -435,6 +450,23 @@ pub mod tipoff {
         Ok(())
     }
 
+    /// Records masked-in human seats from a settled table onto the shared career board.
+    pub fn post_round(ctx: Context<PostRound>, mask: u8) -> Result<()> {
+        post_board_round(&mut ctx.accounts.board, &ctx.accounts.table, mask)
+    }
+
+    /// Commits the shared career board back to Solana without undelegating it.
+    pub fn commit_board(ctx: Context<CommitBoard>) -> Result<()> {
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit(&[ctx.accounts.board.to_account_info()])
+        .build_and_invoke()?;
+        Ok(())
+    }
+
     /// Returns a player's profile to Solana. The player must have left their seat.
     pub fn cash_out(ctx: Context<CashOut>) -> Result<()> {
         require!(
@@ -638,6 +670,15 @@ pub struct InitLedger<'info> {
 }
 
 #[derive(Accounts)]
+pub struct InitBoard<'info> {
+    #[account(init, payer = payer, space = 8 + Board::INIT_SPACE, seeds = [BOARD_SEED], bump)]
+    pub board: Box<Account<'info, Board>>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct InitPlayer<'info> {
     #[account(init, payer = wallet, space = 8 + Player::INIT_SPACE, seeds = [PLAYER_SEED, wallet.key().as_ref()], bump)]
     pub player: Account<'info, Player>,
@@ -654,6 +695,18 @@ pub struct DelegateTable<'info> {
     pub payer: Signer<'info>,
     /// CHECK: the table PDA, checked by seeds
     #[account(mut, del, seeds = [TABLE_SEED, &id.to_le_bytes()], bump)]
+    pub pda: UncheckedAccount<'info>,
+    /// CHECK: target rollup validator
+    pub validator: Option<UncheckedAccount<'info>>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateBoard<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: the board PDA, checked by seeds
+    #[account(mut, del, seeds = [BOARD_SEED], bump)]
     pub pda: UncheckedAccount<'info>,
     /// CHECK: target rollup validator
     pub validator: Option<UncheckedAccount<'info>>,
@@ -847,6 +900,29 @@ pub struct Checkpoint<'info> {
     pub ledger: UncheckedAccount<'info>,
 }
 
+#[derive(Accounts)]
+pub struct PostRound<'info> {
+    pub authority: Signer<'info>,
+    #[account(has_one = authority)]
+    pub table: Box<Account<'info, Table>>,
+    #[account(mut, seeds = [BOARD_SEED], bump = board.bump)]
+    pub board: Box<Account<'info, Board>>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct CommitBoard<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(has_one = authority)]
+    pub table: Box<Account<'info, Table>>,
+    /// CHECK: must be the table authority, so strangers cannot spend the commit budget
+    #[account(address = payer.key())]
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [BOARD_SEED], bump = board.bump)]
+    pub board: Box<Account<'info, Board>>,
+}
+
 #[commit]
 #[derive(Accounts)]
 pub struct CashOut<'info> {
@@ -886,6 +962,8 @@ pub enum TipoffError {
     Overflow,
     #[msg("This seat has already voted this round")]
     AlreadyVoted,
+    #[msg("This round was already posted to the board")]
+    AlreadyPosted,
 }
 
 #[cfg(test)]

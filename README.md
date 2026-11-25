@@ -64,7 +64,7 @@ Tipoff cannot run on plain Solana because both hidden game state and sub-second 
 ## Proof
 
 - **11/11 live devnet attacks rejected:** [`npm run attack`](docs/ATTACKS.md) (`scripts/attack.ts`) creates a throwaway unfunded keypair, sits on live devnet table `7103`, and verifies that all 11 cheat attempts fail at the rollup permissions or program checks (`read_sealed`, `trade_unowned_seat`, `trade_position_limit`, `vote_self`, `vote_twice` with `AlreadyVoted` / error `6011`, `settle_early`, `settle_twice`, `fake_vrf_callback`, `start_round_live`, `tick_fake_price_feed`, `checkpoint_unsettled_stranger`). See [`docs/ATTACKS.md`](docs/ATTACKS.md) for the full run and defense mapping.
-- **49/49 Rust unit, distribution, and property tests passing:** `cargo test -p tipoff` runs 40 unit tests (`rules.rs`, `oracle.rs`, `lib.rs`) and 9 integration/property tests in `programs/tipoff/tests/invariants.rs` (0 ignored), and `anchor build --ignore-keys` builds the program and IDL. Writing the suite caught two edge-case panics that were fixed and covered by regression tests in [`docs/TESTS.md`](docs/TESTS.md):
+- **51/51 Rust unit, distribution, and property tests passing:** `cargo test -p tipoff` runs 42 unit tests (`rules.rs`, `oracle.rs`, `lib.rs`) and 9 integration/property tests in `programs/tipoff/tests/invariants.rs` (0 ignored), and `anchor build --ignore-keys` builds the program and IDL. Writing the suite caught two edge-case panics that were fixed and covered by regression tests in [`docs/TESTS.md`](docs/TESTS.md):
   1. `rules::apply_trade` panicked on `pos.abs()` when `pos + delta == i8::MIN` (`-128`); fixed with a range check returning `TipoffError::PositionLimit` (`rules::tests::apply_trade_i8_min_is_position_limit`).
   2. `oracle::read_price` panicked when `now - publish_time` overflowed (for example `publish_time == i64::MIN`); fixed using `abs_diff` returning `TipoffError::BadPrice` (`oracle::tests::read_price_extreme_timestamp_is_bad_price`).
 - **On-chain devnet record:** Program [`BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet) stores committed `Table` state and the `Ledger` PDA updated by `checkpoint` -> `record_round`.
@@ -103,7 +103,7 @@ ledger: round recorded  ◄─────────   checkpoint:  commit tab
 - **Public (`Table`)**: seats, positions, trade tape (`24` slots), current price, open/oracle prices, and after settlement the insider, shocks, votes, and `revealed_salt`.
 - **Private, zero readers (`Secret`)**: current round salt, insider index, and four shock timings. Only the program accesses it inside the TEE.
 - **Private, one reader per seat (`SeatPrivate`)**: seat's round, role (`trader` or `insider`), shocks (populated for the insider only), and vote.
-- **Profiles and ledger (`Player`, `Ledger`)**: `Player` stores wallet/session scores across sessions; `Ledger` stays undelegated on Solana and stores the latest committed round number and `Table` SHA-256 digest.
+- **Profiles, ledger, and board (`Player`, `Ledger`, `Board`)**: `Player` stores wallet/session scores across sessions; `Ledger` stays undelegated on Solana and stores the latest committed round number and `Table` SHA-256 digest; `Board` holds the top `50` guest/human career entries (`score`, `rounds`, `caught`, `escapes`, `streak`, `best`), updated inside the rollup (`post_round`) and committed to Solana (`commit_board`).
 
 ## Threat model
 
@@ -130,7 +130,7 @@ ledger: round recorded  ◄─────────   checkpoint:  commit tab
 - **Guest keys in `localStorage`.** Browser guest keys are stored locally (clearing site storage drops the seat). `Player` profile PDAs (`init_player`, `cash_out`) exist in the program, while the web UI uses guest sessions only.
 - **Operator-derived bot keys.** House bot keys in `scripts/house.ts` are derived from the operator key, so the operator can read bot seats, though it cannot read human seats or `Secret`.
 - **Oracle exponent handling.** Because the devnet feed account stores a mismatched exponent value, `oracle.rs` interprets prices as 8 decimals directly from the Pyth Lazer SOL/USD feed layout.
-- **Rollup testing environment.** Pure Rust logic, VRF draw properties, and oracle bounds are covered by 49 tests in `cargo test -p tipoff` ([`docs/TESTS.md`](docs/TESTS.md)), while rollup execution, permissions, and attacks are tested live against devnet via `scripts/round.ts`, `scripts/leak.ts`, and `scripts/attack.ts` ([`docs/ATTACKS.md`](docs/ATTACKS.md)) rather than a local validator.
+- **Rollup testing environment.** Pure Rust logic, VRF draw properties, and oracle bounds are covered by 51 tests in `cargo test -p tipoff` ([`docs/TESTS.md`](docs/TESTS.md)), while rollup execution, permissions, and attacks are tested live against devnet via `scripts/round.ts`, `scripts/leak.ts`, and `scripts/attack.ts` ([`docs/ATTACKS.md`](docs/ATTACKS.md)) rather than a local validator.
 
 ## Repository
 
@@ -146,7 +146,7 @@ programs/tipoff/
 app/             React + Three.js web client (Vite)
 docs/
   ATTACKS.md     live 11-attack devnet verification log and rule mapping
-  TESTS.md       49-test Rust suite breakdown and fixed edge-case panics
+  TESTS.md       51-test Rust suite breakdown and fixed edge-case panics
   SUBMISSION.md  hackathon project descriptions and tech stack
   VIDEO.md       2:30 demo script and shot list
   screens/       desktop (1440x900) and phone (390x844) screenshots
@@ -163,7 +163,7 @@ scripts/
 ## Run it
 
 ```bash
-# build Solana program & IDL and run Rust tests (49 tests)
+# build Solana program & IDL and run Rust tests (51 tests)
 anchor build --ignore-keys
 cargo test -p tipoff
 

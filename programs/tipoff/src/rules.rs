@@ -156,6 +156,54 @@ pub fn score_round(insider: u8, votes: &[u8; SEATS], pnl: &[i64; SEATS]) -> Outc
     Outcome { caught, scores }
 }
 
+fn apply_board_entry(entry: &mut Entry, table: &Table, seat_idx: usize) {
+    let seat = &table.seats[seat_idx];
+    entry.score = entry.score.saturating_add(seat.last);
+    entry.rounds = entry.rounds.saturating_add(1);
+    match decode_vote(table.votes[seat_idx]) {
+        Some((target, _)) if target == table.insider => {
+            entry.caught = entry.caught.saturating_add(1);
+            entry.streak = entry.streak.saturating_add(1);
+            entry.best = entry.best.max(entry.streak);
+        }
+        Some(_) => entry.streak = 0,
+        None => {}
+    }
+    if seat_idx as u8 == table.insider && !table.caught {
+        entry.escapes = entry.escapes.saturating_add(1);
+    }
+}
+
+/// Records all masked-in human seats from a settled `table` onto `board`.
+pub fn post_board_round(board: &mut Board, table: &Table, mask: u8) -> Result<()> {
+    require!(table.phase == Phase::Settled as u8, TipoffError::WrongPhase);
+    let slot = (table.id % BOARD_TABLES as u64) as usize;
+    require!(board.posted[slot] < table.round, TipoffError::AlreadyPosted);
+    board.posted[slot] = table.round;
+
+    for (i, seat) in table.seats.iter().enumerate() {
+        if (mask & (1u8 << i)) == 0 || seat.player == Pubkey::default() {
+            continue;
+        }
+        if let Some(pos) = board.entries.iter().position(|e| e.player == seat.player) {
+            apply_board_entry(&mut board.entries[pos], table, i);
+        } else {
+            let mut candidate = Entry { player: seat.player, ..Entry::default() };
+            apply_board_entry(&mut candidate, table, i);
+            if let Some(empty) = board.entries.iter().position(|e| e.player == Pubkey::default()) {
+                board.entries[empty] = candidate;
+            } else if let Some((min_idx, min_entry)) =
+                board.entries.iter().enumerate().min_by_key(|(_, e)| e.score)
+            {
+                if candidate.score > min_entry.score {
+                    board.entries[min_idx] = candidate;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,5 +726,118 @@ mod tests {
         let o_caught = score_round(1, &[1, NONE, 1, NONE, NONE, NONE], &[0, -25_000_000, 0, 0, 0, 0]);
         assert!(o_caught.caught);
         assert_eq!(o_caught.scores[1], -25_000_000 - CAUGHT_FINE);
+    }
+
+    fn blank_board() -> Board {
+        Board { bump: 255, posted: [0; BOARD_TABLES], entries: [Entry::default(); BOARD_LEN] }
+    }
+
+    fn settled_table(id: u64, round: u64, insider: u8, caught: bool) -> Table {
+        Table {
+            authority: Pubkey::new_unique(),
+            id,
+            bump: 255,
+            phase: Phase::Settled as u8,
+            round,
+            nonce: 1,
+            requested_at: 0,
+            t_start: 1_000,
+            settled_at: 1_075,
+            open_price: P,
+            oracle_price: P,
+            price: P,
+            shock_bps: 0,
+            shocks_seen: 4,
+            entropy: [0; 32],
+            seats: [Seat::default(); SEATS],
+            tape: [Print::default(); TAPE],
+            tape_len: 0,
+            insider,
+            caught,
+            votes: [NONE; SEATS],
+            shocks: [Shock::default(); SHOCKS],
+            revealed_salt: [0; 32],
+        }
+    }
+
+    #[test]
+    fn board_post_round_insert_update_streaks_escapes_and_mask() {
+        let mut board = blank_board();
+        let p0 = Pubkey::new_unique();
+        let p1 = Pubkey::new_unique();
+        let bot = Pubkey::new_unique();
+
+        // Round 1 on table 7100: p0 (seat 0) catches insider (seat 1) via all-in; p1 (seat 1) escapes = false; bot (seat 2) masked out.
+        let mut t1 = settled_table(7100, 1, 1, false);
+        t1.seats[0] = Seat { player: p0, last: 250, ..Seat::default() };
+        t1.seats[1] = Seat { player: p1, last: 400, ..Seat::default() };
+        t1.seats[2] = Seat { player: bot, last: 999, ..Seat::default() };
+        t1.votes = [CONVICTION + 1, NONE, 1, NONE, NONE, NONE];
+
+        post_board_round(&mut board, &t1, 0b0000_0011).unwrap();
+        assert_eq!(board.posted[7100 % BOARD_TABLES], 1);
+        assert_eq!(board.entries[0].player, p0);
+        assert_eq!((board.entries[0].score, board.entries[0].rounds, board.entries[0].caught, board.entries[0].streak, board.entries[0].best), (250, 1, 1, 1, 1));
+        assert_eq!(board.entries[1].player, p1);
+        assert_eq!((board.entries[1].score, board.entries[1].rounds, board.entries[1].escapes, board.entries[1].streak), (400, 1, 1, 0));
+        assert!(board.entries[2..].iter().all(|e| e.player == Pubkey::default()));
+
+        // Re-posting the same round on the same table is rejected.
+        assert_tipoff_err(post_board_round(&mut board, &t1, 0b11), TipoffError::AlreadyPosted);
+
+        // Non-settled table is rejected.
+        let mut live = settled_table(7101, 1, 0, false);
+        live.phase = Phase::Live as u8;
+        assert_tipoff_err(post_board_round(&mut board, &live, 0b11), TipoffError::WrongPhase);
+
+        // Round 2: p0 catches again (streak 2, best 2); p1 votes wrong -> streak 0.
+        let mut t2 = settled_table(7100, 2, 3, true);
+        t2.seats[0] = Seat { player: p0, last: 100, ..Seat::default() };
+        t2.seats[1] = Seat { player: p1, last: -50, ..Seat::default() };
+        t2.votes = [3, 0, NONE, NONE, NONE, NONE];
+        post_board_round(&mut board, &t2, 0b11).unwrap();
+        assert_eq!((board.entries[0].score, board.entries[0].rounds, board.entries[0].caught, board.entries[0].streak, board.entries[0].best), (350, 2, 2, 2, 2));
+
+        // Round 3: p0 abstains -> streak stays 2; Round 4: p0 votes wrong -> streak resets to 0, best stays 2.
+        let mut t3 = settled_table(7100, 3, 2, false);
+        t3.seats[0] = Seat { player: p0, last: 20, ..Seat::default() };
+        t3.votes[0] = NONE;
+        post_board_round(&mut board, &t3, 0b01).unwrap();
+        assert_eq!((board.entries[0].streak, board.entries[0].best), (2, 2));
+
+        let mut t4 = settled_table(7100, 4, 2, false);
+        t4.seats[0] = Seat { player: p0, last: -30, ..Seat::default() };
+        t4.votes[0] = 4;
+        post_board_round(&mut board, &t4, 0b01).unwrap();
+        assert_eq!((board.entries[0].score, board.entries[0].rounds, board.entries[0].streak, board.entries[0].best), (340, 4, 0, 2));
+    }
+
+    #[test]
+    fn board_post_round_evicts_lowest_only_for_strictly_higher_score() {
+        let mut board = blank_board();
+        for i in 0..BOARD_LEN {
+            board.entries[i] = Entry {
+                player: Pubkey::new_unique(),
+                score: (i as i64 + 1) * 100,
+                rounds: 1,
+                ..Entry::default()
+            };
+        }
+        let lowest_player = board.entries[0].player;
+
+        // Equal score (100 == 100) does NOT evict.
+        let mut t_eq = settled_table(7100, 1, 5, false);
+        let p_eq = Pubkey::new_unique();
+        t_eq.seats[0] = Seat { player: p_eq, last: 100, ..Seat::default() };
+        post_board_round(&mut board, &t_eq, 0b01).unwrap();
+        assert_eq!(board.entries[0].player, lowest_player);
+
+        // Strictly higher score (101 > 100) evicts lowest_player.
+        let mut t_hi = settled_table(7100, 2, 5, false);
+        let p_hi = Pubkey::new_unique();
+        t_hi.seats[0] = Seat { player: p_hi, last: 101, ..Seat::default() };
+        post_board_round(&mut board, &t_hi, 0b01).unwrap();
+        assert_eq!(board.entries[0].player, p_hi);
+        assert_eq!(board.entries[0].score, 101);
     }
 }

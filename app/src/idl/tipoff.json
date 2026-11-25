@@ -126,6 +126,252 @@
       "args": []
     },
     {
+      "name": "commit_board",
+      "docs": [
+        "Commits the shared career board back to Solana without undelegating it."
+      ],
+      "discriminator": [
+        55,
+        182,
+        0,
+        25,
+        85,
+        224,
+        122,
+        247
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "table"
+        },
+        {
+          "name": "authority",
+          "relations": [
+            "table"
+          ]
+        },
+        {
+          "name": "board",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  111,
+                  97,
+                  114,
+                  100
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "magic_program",
+          "address": "Magic11111111111111111111111111111111111111"
+        },
+        {
+          "name": "magic_context",
+          "writable": true,
+          "address": "MagicContext1111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "delegate_board",
+      "discriminator": [
+        111,
+        167,
+        6,
+        152,
+        230,
+        48,
+        8,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "buffer_pda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  117,
+                  102,
+                  102,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pda"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                162,
+                38,
+                77,
+                255,
+                142,
+                233,
+                201,
+                45,
+                61,
+                160,
+                232,
+                6,
+                219,
+                221,
+                57,
+                96,
+                32,
+                69,
+                7,
+                152,
+                187,
+                95,
+                139,
+                89,
+                50,
+                52,
+                44,
+                87,
+                42,
+                57,
+                137,
+                172
+              ]
+            }
+          }
+        },
+        {
+          "name": "delegation_record_pda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pda"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "delegation_metadata_pda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  108,
+                  101,
+                  103,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  45,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "pda"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "delegation_program"
+            }
+          }
+        },
+        {
+          "name": "pda",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  111,
+                  97,
+                  114,
+                  100
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "validator",
+          "optional": true
+        },
+        {
+          "name": "owner_program",
+          "address": "BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M"
+        },
+        {
+          "name": "delegation_program",
+          "address": "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "delegate_player",
       "discriminator": [
         235,
@@ -890,6 +1136,49 @@
       ]
     },
     {
+      "name": "init_board",
+      "discriminator": [
+        99,
+        74,
+        129,
+        223,
+        26,
+        254,
+        94,
+        217
+      ],
+      "accounts": [
+        {
+          "name": "board",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  111,
+                  97,
+                  114,
+                  100
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "init_ledger",
       "discriminator": [
         91,
@@ -1182,6 +1471,58 @@
         {
           "name": "nonce",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "post_round",
+      "docs": [
+        "Records masked-in human seats from a settled table onto the shared career board."
+      ],
+      "discriminator": [
+        223,
+        90,
+        16,
+        241,
+        195,
+        156,
+        88,
+        207
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "table"
+          ]
+        },
+        {
+          "name": "table"
+        },
+        {
+          "name": "board",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  111,
+                  97,
+                  114,
+                  100
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "mask",
+          "type": "u8"
         }
       ]
     },
@@ -1933,6 +2274,19 @@
   ],
   "accounts": [
     {
+      "name": "Board",
+      "discriminator": [
+        79,
+        48,
+        160,
+        63,
+        153,
+        132,
+        240,
+        56
+      ]
+    },
+    {
       "name": "Ledger",
       "discriminator": [
         43,
@@ -2058,9 +2412,87 @@
       "code": 6011,
       "name": "AlreadyVoted",
       "msg": "This seat has already voted this round"
+    },
+    {
+      "code": 6012,
+      "name": "AlreadyPosted",
+      "msg": "This round was already posted to the board"
     }
   ],
   "types": [
+    {
+      "name": "Board",
+      "docs": [
+        "Shared career board written on the rollup (`post_round`) and committed to Solana (`commit_board`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "posted",
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
+            }
+          },
+          {
+            "name": "entries",
+            "type": {
+              "array": [
+                {
+                  "defined": {
+                    "name": "Entry"
+                  }
+                },
+                50
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Entry",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "player",
+            "type": "pubkey"
+          },
+          {
+            "name": "score",
+            "type": "i64"
+          },
+          {
+            "name": "rounds",
+            "type": "u32"
+          },
+          {
+            "name": "caught",
+            "type": "u16"
+          },
+          {
+            "name": "escapes",
+            "type": "u16"
+          },
+          {
+            "name": "streak",
+            "type": "u16"
+          },
+          {
+            "name": "best",
+            "type": "u16"
+          }
+        ]
+      }
+    },
     {
       "name": "Ledger",
       "docs": [

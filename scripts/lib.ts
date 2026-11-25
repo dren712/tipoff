@@ -25,6 +25,7 @@ export const tablePda = (id: number) => pda(Buffer.from("table"), new anchor.BN(
 export const secretPda = (table: PublicKey) => pda(Buffer.from("secret"), table.toBuffer());
 export const seatPda = (table: PublicKey, i: number) => pda(Buffer.from("seat"), table.toBuffer(), Buffer.from([i]));
 export const ledgerPda = () => pda(Buffer.from("ledger"));
+export const boardPda = () => pda(Buffer.from("board"));
 export const perm = (a: PublicKey) => ({ permission: permissionPdaFromAccount(a) });
 export const seatMetas = (table: PublicKey) =>
   Array.from({ length: SEATS }, (_, i) => ({ pubkey: seatPda(table, i), isSigner: false, isWritable: false }));
