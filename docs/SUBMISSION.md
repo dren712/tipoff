@@ -39,7 +39,7 @@ Settlement reveals the salt so anyone can recompute the draw and commits the tab
 
 ## Links
 
-- **Live URL**: TODO
+- **Live URL**: https://dren712.github.io/tipoff/
 - **Demo Video**: TODO
 - **Source Repository**: https://github.com/dren712/tipoff
 - **Devnet Program**: https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet

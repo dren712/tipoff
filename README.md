@@ -10,7 +10,7 @@ A 60-second Solana trading game where one secret insider knows the news early.
   <img src="docs/screens/phone-live.png" alt="Live trading screen on mobile" width="12%" />
 </p>
 
-Play it: TODO
+Play it: https://dren712.github.io/tipoff/
 
 Video: TODO
 

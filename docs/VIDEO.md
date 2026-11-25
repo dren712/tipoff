@@ -18,7 +18,7 @@ Target runtime: 2 minutes 30 seconds (`0:00` to `2:30`).
 | 1:54 - 2:04 | Show the "Read another seat" check failing during the 15-second voting window alongside the ballot tray showing only your own "Accused" tag. | Votes stay sealed in each player's private seat account until settlement, so nobody can copy or counter-vote early. | Votes sealed in SeatPrivate until settle |
 | 2:04 - 2:15 | Terminal window running `npm run attack` (`scripts/attack.ts`) against devnet table 7103, scrolling through all 11 PASS lines to `11/11 attacks rejected`. | Our live attack script runs eleven cheats against devnet table 7103, and the program rejects all eleven. | npm run attack: 11/11 attacks rejected on devnet |
 | 2:15 - 2:23 | Click "Solana record" in the "Try to cheat" drawer to open Solana Explorer on devnet, showing the committed round transaction, Magic Action call to `record_round`, and program `BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`. | At settlement, a Magic Action commits the round hash and result to Solana's base layer for public proof. | Magic Action commits round to Solana devnet Ledger |
-| 2:23 - 2:30 | Return to the Tipoff lobby view with an end card listing the program ID, repository URL, and live link placeholder. | Tipoff runs live on Solana devnet with no wallet required. Play a sixty-second round at the link below. | Play: TODO / Code: github.com/dren712/tipoff |
+| 2:23 - 2:30 | Return to the Tipoff lobby view with an end card listing the program ID, repository URL, and live link placeholder. | Tipoff runs live on Solana devnet with no wallet required. Play a sixty-second round at the link below. | Play: dren712.github.io/tipoff / Code: github.com/dren712/tipoff |
 
 ## Exact Screen Recordings Needed
 
