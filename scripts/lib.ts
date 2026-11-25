@@ -9,6 +9,7 @@ import crypto from "crypto";
 export const BASE = process.env.BASE_RPC ?? "https://rpc.magicblock.app/devnet";
 export const TEE = process.env.TEE_RPC ?? "https://devnet-tee.magicblock.app";
 export const TEE_VALIDATOR = new PublicKey("MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo");
+export const MAGIC_FEE_VAULT = new PublicKey("EUJssY6kG5fb35s9Lc6jyh6joRPo2e2MhJqoKCqcTt5b");
 export const FEED = new PublicKey("ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu");
 export const QUEUE = new PublicKey("5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc");
 export const SEATS = 6;
@@ -39,6 +40,11 @@ export function loadAdmin(): Keypair {
 /// House bots are derived from the admin key, so they need no storage.
 export function botKey(admin: Keypair, table: PublicKey, i: number): Keypair {
   const seed = crypto.createHash("sha256").update(admin.secretKey).update(table.toBuffer()).update(Buffer.from([i])).digest();
+  return Keypair.fromSeed(seed);
+}
+
+export function housePayer(admin: Keypair): Keypair {
+  const seed = crypto.createHash("sha256").update("tipoff-house-payer").update(admin.secretKey).digest();
   return Keypair.fromSeed(seed);
 }
 

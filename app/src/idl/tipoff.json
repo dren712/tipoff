@@ -91,9 +91,18 @@
         },
         {
           "name": "authority",
+          "docs": [
+            "Only the table authority can spend the commit budget."
+          ],
+          "signer": true,
           "relations": [
             "table"
           ]
+        },
+        {
+          "name": "magic_fee_vault",
+          "writable": true,
+          "optional": true
         },
         {
           "name": "ledger",
@@ -151,9 +160,18 @@
         },
         {
           "name": "authority",
+          "docs": [
+            "Only the table authority can spend the commit budget."
+          ],
+          "signer": true,
           "relations": [
             "table"
           ]
+        },
+        {
+          "name": "magic_fee_vault",
+          "writable": true,
+          "optional": true
         },
         {
           "name": "board",

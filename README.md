@@ -50,7 +50,7 @@ Tipoff cannot run on plain Solana because both hidden game state and sub-second 
 - **VRF draw:** `start_round` requests randomness from MagicBlock VRF inside the rollup, and `on_random` checks `VRF_CALLBACK_IDENTITY` and the active request nonce before hashing the VRF output with the prior salt and player sit entropy to derive the insider and shocks.
 - **Sealed votes:** Every accusation writes only to the voter's `SeatPrivate` account during the 15-second voting window. No player or operator can read anyone else's vote until `settle` unseals all votes together.
 - **Fee-free sub-second moves:** Seated players trade and vote inside the TEE using a browser-generated guest keypair, requiring no wallet popups and no SOL for fees. Confirmations measured in the browser and `scripts/round.ts` take about `350` to `500 ms` (median `520 ms` in one scripted run).
-- **Commit back to Solana:** Once a round settles, `checkpoint` commits `Table` to Solana devnet and triggers a `record_round` Magic Action that records the round number and account digest into the base-layer `Ledger` PDA.
+- **Commit back to Solana:** Once a round settles, `checkpoint` commits `Table` to Solana devnet and triggers a `record_round` Magic Action that records the round number and account digest into the base-layer `Ledger` PDA. A delegated house fee payer and the validator's Magic fee vault fund commits after rounds with human players, plus a 15-minute heartbeat.
 
 | MagicBlock piece | What it does in Tipoff | Without it |
 |---|---|---|
@@ -103,7 +103,7 @@ ledger: round recorded  ◄─────────   checkpoint:  commit tab
 - **Public (`Table`)**: seats, positions, trade tape (`24` slots), current price, open/oracle prices, and after settlement the insider, shocks, votes, and `revealed_salt`.
 - **Private, zero readers (`Secret`)**: current round salt, insider index, and four shock timings. Only the program accesses it inside the TEE.
 - **Private, one reader per seat (`SeatPrivate`)**: seat's round, role (`trader` or `insider`), shocks (populated for the insider only), and vote.
-- **Profiles, ledger, and board (`Player`, `Ledger`, `Board`)**: `Player` stores wallet/session scores across sessions; `Ledger` stays undelegated on Solana and stores the latest committed round number and `Table` SHA-256 digest; `Board` holds the top `50` guest/human career entries (`score`, `rounds`, `caught`, `escapes`, `streak`, `best`), updated inside the rollup (`post_round`) and committed to Solana (`commit_board`).
+- **Profiles, ledger, and board (`Player`, `Ledger`, `Board`)**: `Player` stores wallet/session scores across sessions; `Ledger` stays undelegated on Solana and stores the latest committed round number and `Table` SHA-256 digest; `Board` holds the top `50` guest/human career entries (`score`, `rounds`, `caught`, `escapes`, `streak`, `best`), updated inside the rollup (`post_round`) and committed to Solana (`commit_board`) after rounds with human entries.
 
 ## Threat model
 

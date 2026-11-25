@@ -439,14 +439,18 @@ pub mod tipoff {
             escrow_authority: ctx.accounts.payer.to_account_info(),
             compute_units: 60_000,
         };
-        MagicIntentBundleBuilder::new(
+        let mut builder = MagicIntentBundleBuilder::new(
             ctx.accounts.payer.to_account_info(),
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
-        )
-        .commit(&[ctx.accounts.table.to_account_info()])
-        .add_post_commit_actions([action])
-        .build_and_invoke()?;
+        );
+        if let Some(vault) = &ctx.accounts.magic_fee_vault {
+            builder = builder.magic_fee_vault(vault.to_account_info());
+        }
+        builder
+            .commit(&[ctx.accounts.table.to_account_info()])
+            .add_post_commit_actions([action])
+            .build_and_invoke()?;
         Ok(())
     }
 
@@ -457,13 +461,17 @@ pub mod tipoff {
 
     /// Commits the shared career board back to Solana without undelegating it.
     pub fn commit_board(ctx: Context<CommitBoard>) -> Result<()> {
-        MagicIntentBundleBuilder::new(
+        let mut builder = MagicIntentBundleBuilder::new(
             ctx.accounts.payer.to_account_info(),
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
-        )
-        .commit(&[ctx.accounts.board.to_account_info()])
-        .build_and_invoke()?;
+        );
+        if let Some(vault) = &ctx.accounts.magic_fee_vault {
+            builder = builder.magic_fee_vault(vault.to_account_info());
+        }
+        builder
+            .commit(&[ctx.accounts.board.to_account_info()])
+            .build_and_invoke()?;
         Ok(())
     }
 
@@ -892,9 +900,11 @@ pub struct Checkpoint<'info> {
     pub payer: Signer<'info>,
     #[account(mut, has_one = authority)]
     pub table: Box<Account<'info, Table>>,
-    /// CHECK: must be the table authority, so strangers cannot spend the commit budget
-    #[account(address = payer.key())]
-    pub authority: UncheckedAccount<'info>,
+    /// Only the table authority can spend the commit budget.
+    pub authority: Signer<'info>,
+    /// CHECK: the rollup validator's magic fee vault, validated by the Magic program
+    #[account(mut)]
+    pub magic_fee_vault: Option<UncheckedAccount<'info>>,
     /// CHECK: the base-layer ledger written by the Magic Action
     #[account(seeds = [LEDGER_SEED], bump)]
     pub ledger: UncheckedAccount<'info>,
@@ -916,9 +926,11 @@ pub struct CommitBoard<'info> {
     pub payer: Signer<'info>,
     #[account(has_one = authority)]
     pub table: Box<Account<'info, Table>>,
-    /// CHECK: must be the table authority, so strangers cannot spend the commit budget
-    #[account(address = payer.key())]
-    pub authority: UncheckedAccount<'info>,
+    /// Only the table authority can spend the commit budget.
+    pub authority: Signer<'info>,
+    /// CHECK: the rollup validator's magic fee vault, validated by the Magic program
+    #[account(mut)]
+    pub magic_fee_vault: Option<UncheckedAccount<'info>>,
     #[account(mut, seeds = [BOARD_SEED], bump = board.bump)]
     pub board: Box<Account<'info, Board>>,
 }

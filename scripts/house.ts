@@ -6,13 +6,14 @@
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import crypto from "crypto";
 import {
-  FEED, FIRST_TABLE, QUEUE, ROUND_SECS, SEATS, VOTE_SECS, botKey, loadAdmin, perm, program, seatMetas, seatPda,
-  send, sleep, tablePda, teeConn,
+  FEED, FIRST_TABLE, MAGIC_FEE_VAULT, QUEUE, ROUND_SECS, SEATS, VOTE_SECS, botKey, housePayer as deriveHousePayer,
+  loadAdmin, perm, program, seatMetas, seatPda, send, sleep, tablePda, teeConn,
 } from "./lib.js";
 
 const INTERMISSION = 12; // seconds between a settlement and the next draw
 const LOBBY_WAIT = 6; // seconds a new table waits for more humans
 const admin = loadAdmin();
+const housePayer = deriveHousePayer(admin);
 const count = Number(process.argv[2] ?? 4);
 const hours = Number(process.argv[3] ?? 0);
 const started = Date.now();
@@ -21,10 +22,11 @@ const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 const zero = PublicKey.default;
 
 type Bot = { kp: Keypair; conn: Connection; style: "momentum" | "fade" | "noise" | "holder"; nextAt: number; voted: boolean; plan?: any; seat: number };
-type T = { id: number; key: PublicKey; bots: Bot[]; round: number; firstHuman: number; checkpointed: number; busy: boolean; idle: Map<string, number> };
+type T = { id: number; key: PublicKey; bots: Bot[]; round: number; firstHuman: number; checkpointed: number; lastCheckpointAt: number; busy: boolean; idle: Map<string, number> };
 
 let er = await teeConn(admin);
 let pe = program(er, admin);
+let lastBoardCommitAt = 0;
 const tables: T[] = [];
 const styles = ["momentum", "fade", "noise", "holder", "momentum", "noise"] as const;
 
@@ -40,11 +42,14 @@ for (let n = 0; n < count; n++) {
     const kp = botKey(admin, key, i);
     bots.push({ kp, conn: er, style: styles[i], nextAt: 0, voted: false, seat: -1 });
   }
-  tables.push({ id: FIRST_TABLE + n, key, bots, round: -1, firstHuman: 0, checkpointed: -1, busy: false, idle: new Map() });
+  tables.push({ id: FIRST_TABLE + n, key, bots, round: -1, firstHuman: 0, checkpointed: -1, lastCheckpointAt: 0, busy: false, idle: new Map() });
 }
 await connect();
 const LIVE_TABLES = Number(process.env.LIVE_TABLES ?? 1);
 console.log(`house ${admin.publicKey.toBase58()} running ${count} tables`);
+const payerBalance = await er.getBalance(housePayer.publicKey);
+console.log(`house payer ${housePayer.publicKey.toBase58()} ER balance ${(payerBalance / 1e9).toFixed(4)} SOL`);
+if (payerBalance < 50_000_000) console.warn("house payer ER balance is under 0.05 SOL");
 
 const botAt = (t: T, player: PublicKey) => t.bots.find((b) => b.kp.publicKey.equals(player));
 const tx = (m: any) => m.transaction();
@@ -146,6 +151,11 @@ async function step(t: T) {
   const round = s.round.toNumber();
   if (s.phase === 3 && t.checkpointed !== round) {
     t.checkpointed = round;
+    let mask = 0;
+    for (let i = 0; i < SEATS; i++) {
+      const x = s.seats[i];
+      if (!x.player.equals(zero) && !botAt(t, x.player)) mask |= 1 << i;
+    }
     // Humans who neither traded nor voted for two rounds in a row lose their seat.
     for (let i = 0; i < SEATS; i++) {
       const x = s.seats[i];
@@ -155,12 +165,18 @@ async function step(t: T) {
       t.idle.set(k, n);
       if (n >= 2) { await stand(t, admin, er, i); t.idle.delete(k); console.log(`table ${t.id}: cleared idle seat ${i}`); }
     }
-    const sig = await send(er, await tx(pe.methods.checkpoint().accountsPartial({ payer: admin.publicKey, table: t.key, authority: admin.publicKey })), [admin]);
-    console.log(`table ${t.id} round ${round} checkpoint ${sig}`);
-    let mask = 0;
-    for (let i = 0; i < SEATS; i++) {
-      const x = s.seats[i];
-      if (!x.player.equals(zero) && !botAt(t, x.player)) mask |= 1 << i;
+    if (mask !== 0 || now() - t.lastCheckpointAt >= 15 * 60) {
+      try {
+        const sig = await send(er, await tx(pe.methods.checkpoint().accountsPartial({
+          payer: housePayer.publicKey, table: t.key, authority: admin.publicKey, magicFeeVault: MAGIC_FEE_VAULT,
+        })), [housePayer, admin]);
+        t.lastCheckpointAt = now();
+        console.log(`table ${t.id} round ${round} checkpoint ${sig}`);
+      } catch (e) {
+        console.log(`table ${t.id} round ${round} checkpoint failed: ${String(e).slice(0, 160)}`);
+      }
+    } else {
+      console.log(`table ${t.id} round ${round} checkpoint skipped (no human players; 15-minute heartbeat not due)`);
     }
     try {
       const postSig = await send(er, await tx(pe.methods.postRound(mask).accountsPartial({ authority: admin.publicKey, table: t.key })), [admin]);
@@ -168,11 +184,18 @@ async function step(t: T) {
     } catch (e) {
       console.log(`table ${t.id} round ${round} post_round failed: ${String(e).slice(0, 160)}`);
     }
-    try {
-      const commitSig = await send(er, await tx(pe.methods.commitBoard().accountsPartial({ payer: admin.publicKey, table: t.key, authority: admin.publicKey })), [admin]);
-      console.log(`table ${t.id} round ${round} commit_board ${commitSig}`);
-    } catch (e) {
-      console.log(`table ${t.id} round ${round} commit_board failed: ${String(e).slice(0, 160)}`);
+    if (mask !== 0 && now() - lastBoardCommitAt >= 60) {
+      try {
+        const commitSig = await send(er, await tx(pe.methods.commitBoard().accountsPartial({
+          payer: housePayer.publicKey, table: t.key, authority: admin.publicKey, magicFeeVault: MAGIC_FEE_VAULT,
+        })), [housePayer, admin]);
+        lastBoardCommitAt = now();
+        console.log(`table ${t.id} round ${round} commit_board ${commitSig}`);
+      } catch (e) {
+        console.log(`table ${t.id} round ${round} commit_board failed: ${String(e).slice(0, 160)}`);
+      }
+    } else {
+      console.log(`table ${t.id} round ${round} commit_board skipped (${mask === 0 ? "no human players" : "60-second rate limit"})`);
     }
     return;
   }

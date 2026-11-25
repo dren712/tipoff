@@ -9,6 +9,7 @@ import {
 import nacl from "tweetnacl";
 import fs from "fs";
 import crypto from "crypto";
+import { housePayer, MAGIC_FEE_VAULT } from "./lib.js";
 
 const BASE = process.env.BASE_RPC ?? "https://rpc.magicblock.app/devnet";
 const TEE = process.env.TEE_RPC ?? "https://devnet-tee.magicblock.app";
@@ -21,6 +22,7 @@ const idl = JSON.parse(fs.readFileSync("app/src/idl/tipoff.json", "utf8"));
 const load = (p: string) => Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(p, "utf8"))));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const admin = load(process.env.WALLET ?? "keys/deployer.json");
+const commitPayer = housePayer(admin);
 const PID = new PublicKey(idl.address);
 const pda = (...s: (Buffer | Uint8Array)[]) => PublicKey.findProgramAddressSync(s, PID)[0];
 
@@ -162,7 +164,9 @@ async function main() {
   console.log("  votes", t.votes, "scores", t.seats.map((s: any) => (s.last.toNumber() / 1e6).toFixed(1)));
 
   console.log("checkpoint to Solana");
-  const sig = await send(er, await pe.methods.checkpoint().accountsPartial({ payer: admin.publicKey, table, authority: admin.publicKey }).transaction(), [admin], "checkpoint");
+  const sig = await send(er, await pe.methods.checkpoint().accountsPartial({
+    payer: commitPayer.publicKey, table, authority: admin.publicKey, magicFeeVault: MAGIC_FEE_VAULT,
+  }).transaction(), [commitPayer, admin], "checkpoint");
   await sleep(15000);
   const l: any = await pb.account.ledger.fetch(ledger);
   console.log("  ledger rounds", l.rounds.toString(), "last round", l.lastRound.toString(), "checkpoint tx", sig);

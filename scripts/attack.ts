@@ -317,6 +317,7 @@ async function main() {
         payer: me.publicKey,
         table,
         authority: me.publicKey,
+        magicFeeVault: null,
       })
       .transaction();
     const res = await sendRaw(conn, tx, [me]);
