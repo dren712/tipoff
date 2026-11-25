@@ -373,10 +373,8 @@ pub mod tipoff {
         require!(now >= t.t_start + ROUND_SECS + VOTE_SECS, TipoffError::TooEarly);
         let s = &ctx.accounts.secret;
         require!(s.round == t.round, TipoffError::BadSecret);
-        // The close price uses the last oracle print and every shock.
-        t.shock_bps = s.shocks.iter().map(|x| x.bps as i32).sum();
-        t.shocks_seen = SHOCKS as u8;
-        t.price = shocked(t.oracle_price, t.shock_bps)?;
+        // The close price uses the last oracle print (12x levered from open) and every shock.
+        apply_close(t, s)?;
 
         require!(ctx.remaining_accounts.len() == SEATS, TipoffError::BadSeat);
         let mut votes = [NONE; SEATS];
@@ -579,7 +577,18 @@ fn refresh(t: &mut Table, s: &Account<Secret>, feed: &AccountInfo, now: i64) -> 
     }
     t.shock_bps = bps;
     t.shocks_seen = seen;
-    t.price = shocked(t.oracle_price, bps)?;
+    t.price = market_price(t)?;
+    Ok(())
+}
+
+fn market_price(t: &Table) -> Result<i64> {
+    shocked(levered(t.oracle_price, t.open_price)?, t.shock_bps)
+}
+
+fn apply_close(t: &mut Table, s: &Secret) -> Result<()> {
+    t.shock_bps = s.shocks.iter().map(|x| x.bps as i32).sum();
+    t.shocks_seen = SHOCKS as u8;
+    t.price = market_price(t)?;
     Ok(())
 }
 
@@ -963,13 +972,14 @@ mod tests {
         let err = refresh(&mut wrong_round, &secret_acc, &f_ai, 1_005).unwrap_err();
         assert_eq!(err, anchor_lang::error::Error::from(TipoffError::BadSecret));
 
-        // Fresh oracle updates price; at elapsed = 22s, first two shocks are revealed (100 - 150 = -50 bps).
+        // Fresh oracle updates price (150 -> 200 clamps at +MAX_SWING_BPS = 159); first two shocks sum to -50 bps.
         let mut t = empty_table(3, Phase::Live as u8, 1_000, 150_00000000);
+        let levered_base = levered(200_00000000, 150_00000000).unwrap();
         refresh(&mut t, &secret_acc, &f_ai, 1_022).unwrap();
         assert_eq!(t.oracle_price, 200_00000000);
         assert_eq!(t.shocks_seen, 2);
         assert_eq!(t.shock_bps, -50);
-        assert_eq!(t.price, shocked(200_00000000, -50).unwrap());
+        assert_eq!(t.price, shocked(levered_base, -50).unwrap());
         assert_eq!(t.shocks[0], shocks[0]);
         assert_eq!(t.shocks[1], shocks[1]);
         assert_eq!(t.shocks[2], Shock::default());
@@ -979,7 +989,35 @@ mod tests {
         assert_eq!(t.oracle_price, 200_00000000);
         assert_eq!(t.shocks_seen, 4);
         assert_eq!(t.shock_bps, 100);
-        assert_eq!(t.price, shocked(200_00000000, 100).unwrap());
+        assert_eq!(t.price, shocked(levered_base, 100).unwrap());
+    }
+
+    #[test]
+    fn settle_price_composes_levered_move_and_shocks() {
+        let open = 100_00000000;
+        let oracle = 100_20000000; // +0.20% oracle move -> +2.40% (+240 bps) levered move
+        let shocks = [
+            Shock { at: 10, bps: 100 },
+            Shock { at: 25, bps: -50 },
+            Shock { at: 40, bps: 300 },
+            Shock { at: 52, bps: -400 },
+        ];
+        let mut t = empty_table(7, Phase::Live as u8, 1_000, open);
+        t.oracle_price = oracle;
+        let s = Secret {
+            table: Pubkey::new_unique(),
+            bump: 255,
+            round: 7,
+            salt: [9u8; 32],
+            insider: 0,
+            shocks,
+        };
+
+        apply_close(&mut t, &s).unwrap();
+        assert_eq!(t.shocks_seen, SHOCKS as u8);
+        assert_eq!(t.shock_bps, -50);
+        assert_eq!(t.price, shocked(levered(oracle, open).unwrap(), -50).unwrap());
+        assert_eq!(t.price, shocked(102_40000000, -50).unwrap());
     }
 
     #[test]

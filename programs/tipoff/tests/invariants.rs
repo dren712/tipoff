@@ -2,12 +2,20 @@ use anchor_lang::prelude::Pubkey;
 use proptest::prelude::*;
 use solana_sha256_hasher::hashv;
 use tipoff::rules::{
-    apply_trade, draw_round, equity, score_round, shocked, ACCUSE_LOSS, ACCUSE_WIN, CAUGHT_FINE,
-    MAX_POS, ROUND_SECS,
+    apply_trade, draw_round, equity, levered, score_round, shocked, ACCUSE_LOSS, ACCUSE_WIN,
+    CAUGHT_FINE, MAX_POS, MAX_SWING_BPS, ROUND_SECS,
 };
 use tipoff::state::{
     Print, Seat, SeatPrivate, Table, NONE, ROLE_INSIDER, SEATS, SHOCKS, TAPE,
 };
+
+fn window_shock_bounds(window: usize) -> core::ops::RangeInclusive<i16> {
+    match window {
+        2 => 120..=375,
+        3 => 160..=500,
+        _ => 80..=250,
+    }
+}
 
 #[test]
 fn draw_uniformity_across_many_seeds() {
@@ -16,7 +24,7 @@ fn draw_uniformity_across_many_seeds() {
     let mut up = 0u32;
     let mut down = 0u32;
     let mut offset_counts = [0u32; 12];
-    let mut mag_buckets = [0u32; 3]; // [80..=136], [137..=193], [194..=250]
+    let mut mag_buckets = [0u32; 3]; // equal-width raw thirds per window (scaled on windows 2, 3)
 
     for n in 0..N {
         let salt = hashv(&[b"uniformity", &n.to_le_bytes()]).to_bytes();
@@ -35,11 +43,18 @@ fn draw_uniformity_across_many_seeds() {
                 down += 1;
             }
             let mag = sh.bps.abs();
-            assert!((80..=250).contains(&mag));
-            match mag {
-                80..=136 => mag_buckets[0] += 1,
-                137..=193 => mag_buckets[1] += 1,
-                _ => mag_buckets[2] += 1,
+            assert!(window_shock_bounds(i).contains(&mag), "window {i} mag {mag}");
+            let (b1, b2) = match i {
+                2 => (204, 289),
+                3 => (272, 386),
+                _ => (136, 193),
+            };
+            if mag <= b1 {
+                mag_buckets[0] += 1;
+            } else if mag <= b2 {
+                mag_buckets[1] += 1;
+            } else {
+                mag_buckets[2] += 1;
             }
         }
     }
@@ -168,7 +183,7 @@ proptest! {
                 prop_assert!(sh.at > d1.shocks[i - 1].at);
             }
             let mag = sh.bps.abs();
-            prop_assert!((80..=250).contains(&mag));
+            prop_assert!(window_shock_bounds(i).contains(&mag));
         }
     }
 
@@ -338,5 +353,20 @@ proptest! {
         }
         let outcome = score_round(draw.insider, &votes, &pnl);
         prop_assert_eq!(outcome.scores.len(), SEATS);
+    }
+
+    #[test]
+    fn prop_levered_bounds_and_shock_composition(
+        open_price in 50_00000000i64..=300_00000000i64,
+        oracle_delta_bps in -2_000i64..=2_000i64,
+        shock_bps in -1_375i32..=1_375i32,
+    ) {
+        let oracle_price = (open_price as i128 * (10_000 + oracle_delta_bps as i128) / 10_000) as i64;
+        let lev = levered(oracle_price, open_price).unwrap();
+        let min_lev = shocked(open_price, -(MAX_SWING_BPS as i32)).unwrap();
+        let max_lev = shocked(open_price, MAX_SWING_BPS as i32).unwrap();
+        prop_assert!(lev >= min_lev && lev <= max_lev);
+        let composed = shocked(lev, shock_bps).unwrap();
+        prop_assert!(composed > 0);
     }
 }
