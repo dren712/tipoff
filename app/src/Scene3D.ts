@@ -1026,6 +1026,8 @@ export class Scene3D {
   private quality = 2;
   private frames = 0;
   private spent = 0;
+  private warmupFrames = 0;
+  private badWindows = 0;
   /// Renderer facts for the proof panel and QA.
   stats() { const i = this.renderer.info; return { quality: this.quality, calls: i.render.calls, triangles: i.render.triangles, ratio: this.renderer.getPixelRatio() }; }
   private click = (e: MouseEvent) => { const s = this.pick(e); if (s >= 0 && this.view?.stage === "vote" && this.view.canVote !== false && s !== this.view.me && !this.view.seats[s].empty) this.onPick(s); };
@@ -1302,14 +1304,24 @@ export class Scene3D {
     this.renderer.info.reset();
     this.composer.render();
     // Adaptive quality ladder: drop shadows/halve audience at Q1, disable beams/flicker/normal map/bloom at Q0.
-    this.frames++;
-    this.spent += raw;
-    if (this.frames === 45) {
-      if (this.spent / 45 > 0.03 && this.quality > 0) {
-        this.applyQuality(this.quality - 1);
+    if (this.warmupFrames < 120) {
+      this.warmupFrames++;
+    } else if (!document.hidden) {
+      this.frames++;
+      this.spent += raw;
+      if (this.frames === 45) {
+        if (this.spent / 45 > 0.03 && this.quality > 0) {
+          this.badWindows++;
+          if (this.badWindows >= 2) {
+            this.applyQuality(this.quality - 1);
+            this.badWindows = 0;
+          }
+        } else {
+          this.badWindows = 0;
+        }
+        this.frames = 0;
+        this.spent = 0;
       }
-      this.frames = 0;
-      this.spent = 0;
     }
   };
 
