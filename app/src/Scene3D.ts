@@ -470,6 +470,7 @@ export class Scene3D {
   private longChevTex!: THREE.CanvasTexture;
   private shortChevTex!: THREE.CanvasTexture;
   private vault = new THREE.Group();
+  private vaultTag!: THREE.Mesh;
   private vaultCore!: THREE.Mesh;
   private vaultRings: THREE.Mesh[] = [];
   private vaultEdgeMat!: THREE.LineBasicMaterial;
@@ -807,11 +808,11 @@ export class Scene3D {
     this.vault.position.copy(VAULT);
     this.vaultLight.position.copy(VAULT).add(new THREE.Vector3(0, 0.5, 2.2));
     this.vaultTagMat = label("PRIVATE ROLLUP", "#ff9af9", 768, 128);
-    const tag = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 0.7), this.vaultTagMat);
-    tag.position.set(VAULT.x, VAULT.y + 2.25, VAULT.z);
+    this.vaultTag = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 0.7), this.vaultTagMat);
+    this.vaultTag.position.set(VAULT.x, VAULT.y + 2.25, VAULT.z);
     const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 16), new THREE.MeshBasicMaterial({ color: 0x6a1d7a, toneMapped: false }));
     stem.position.set(VAULT.x, VAULT.y - 9.5, VAULT.z);
-    this.scene.add(this.vault, this.vaultLight, tag, stem);
+    this.scene.add(this.vault, this.vaultLight, this.vaultTag, stem);
 
     // Effects.
     const coin = new THREE.CylinderGeometry(0.13, 0.13, 0.04, 10);
@@ -976,12 +977,12 @@ export class Scene3D {
     });
   }
 
-  private fountain(at: THREE.Vector3, n: number) {
+  private fountain(at: THREE.Vector3, n: number, behind = false) {
     for (const c of this.coins) {
       if (n <= 0) break;
       if (c.life > 0) continue;
-      c.p.set(at.x, 1.7, at.z);
-      c.v.set((Math.random() - 0.5) * 3.2, 5 + Math.random() * 4, (Math.random() - 0.5) * 3.2);
+      c.p.set(at.x, 1.7, at.z - (behind ? 1.4 : 0));
+      c.v.set((Math.random() - 0.5) * (behind ? 2.2 : 3.2), 5 + Math.random() * 4, behind ? -0.6 - Math.random() * 1.2 : (Math.random() - 0.5) * 3.2);
       c.life = 1.6 + Math.random() * 0.5;
       n--;
     }
@@ -995,6 +996,7 @@ export class Scene3D {
     const changed = prev?.stage !== v.stage;
     if (changed) {
       this.stageAt = this.clock.elapsedTime;
+      if (v.stage === "reveal") for (const coin of this.coins) coin.life = 0;
       if (prev && !this.orbit) {
         this.camFromPos.copy(this.camera.position);
         this.camFromLook.copy(this.look);
@@ -1041,10 +1043,10 @@ export class Scene3D {
             this.express(b, v.caught ? "Angry" : null);
             if (v.caught) {
               this.playSeq(b, ["Punch", "Punch", "Sitting"], true);
-              this.cage.position.set(b.root.position.x, 6, b.root.position.z);
+              this.cage.position.set(b.root.position.x, this.camera.aspect < 1.25 ? 2 : 6, b.root.position.z);
             } else {
               this.play(b, "Dance");
-              this.fountain(b.root.position, 60);
+              this.fountain(b.root.position, 60, true);
             }
           } else {
             this.express(b, v.caught ? null : "Sad");
@@ -1238,6 +1240,7 @@ export class Scene3D {
   /// Camera per stage. Adapts distance and framing so all lanes fit on narrow screens and reveals stay centred.
   private direct(v: View | null, t: number) {
     const aspect = this.camera.aspect || 1, a = Math.max(1, 1.5 / aspect), portrait = aspect < 1.25, stage = v?.stage ?? "idle";
+    this.vaultTag.visible = !(portrait && (stage === "live" || stage === "vote" || stage === "reveal"));
     const meX = v && v.me >= 0 ? laneX(v.me) : 0, me = v && v.me >= 0 ? this.bots[v.me] : undefined;
     let fov = 50;
     if (this.orbit) {
@@ -1257,8 +1260,8 @@ export class Scene3D {
         this.camPos.set(0, last ? 9.6 : 9.9, 23.2 + z * 0.4);
         this.camLook.set(0, 1.15, 0);
       } else {
-        this.camPos.set(meX * 0.12, 10.6, 21.4 + z);
-        this.camLook.set(meX * 0.08, 0.95, 0.4);
+        this.camPos.set(meX * 0.12, 10.6, 22.4 + z);
+        this.camLook.set(meX * 0.08, 0.95, 3.5);
         fov = last ? 49.5 : 49;
       }
     } else if (stage === "deal" && me) {
@@ -1275,13 +1278,12 @@ export class Scene3D {
       const p = this.bots[v!.insider].root.position;
       const el = t - this.stageAt;
       const orbitAngle = Math.max(0, el - 0.85) * 0.28;
-      const orbitPan = Math.sin(orbitAngle) * (portrait ? 0.6 : 1.45);
-      fov = portrait ? 58 : 54;
-      const camX = (portrait ? p.x * 0.22 : p.x * 0.62) + orbitPan;
-      const minBack = (6.7 + Math.abs(camX)) / (Math.tan((fov * Math.PI) / 360) * aspect * 0.94);
-      const back = portrait ? Math.max(10.5, minBack) : 9.4;
-      this.camPos.set(camX, portrait ? 3.1 : 2.85, p.z + back);
-      this.camLook.set(portrait ? p.x * 0.18 : p.x * 0.48, portrait ? 1.95 : 2.0, p.z);
+      const orbitPan = Math.sin(orbitAngle) * (portrait ? 0.2 : 1.45);
+      fov = portrait ? 44 : 54;
+      const camX = (portrait ? p.x : p.x * 0.62) + orbitPan;
+      const back = portrait ? 7.2 : 9.4;
+      this.camPos.set(camX, portrait ? 3.0 : 2.85, p.z + back);
+      this.camLook.set(portrait ? p.x : p.x * 0.48, portrait ? 1.85 : 2.0, p.z);
     } else {
       this.camPos.set(Math.sin(t * 0.2) * 2.5, 6.2, 15 * a);
       this.camLook.set(0, 3.6, -4);
@@ -1306,11 +1308,18 @@ export class Scene3D {
     this.direct(v, t);
     const k = 1 - Math.exp(-raw * (stage === "idle" ? 1.5 : 3.5));
     if (this.transT < 1) {
-      this.transT = Math.min(1, this.transT + raw / this.transDur);
-      const e = this.transT * this.transT * (3 - 2 * this.transT);
-      this.camera.position.lerpVectors(this.camFromPos, this.camPos, e);
-      this.look.lerpVectors(this.camFromLook, this.camLook, e);
-      this.fov = THREE.MathUtils.lerp(this.camFromFov, this.targetFov, e);
+      if (stage === "reveal" && this.camera.aspect < 1.25) {
+        this.transT = 1;
+        this.camera.position.copy(this.camPos);
+        this.look.copy(this.camLook);
+        this.fov = this.targetFov;
+      } else {
+        this.transT = Math.min(1, this.transT + raw / this.transDur);
+        const e = this.transT * this.transT * (3 - 2 * this.transT);
+        this.camera.position.lerpVectors(this.camFromPos, this.camPos, e);
+        this.look.lerpVectors(this.camFromLook, this.camLook, e);
+        this.fov = THREE.MathUtils.lerp(this.camFromFov, this.targetFov, e);
+      }
     } else {
       this.camera.position.lerp(this.camPos, k);
       this.look.lerp(this.camLook, k);
@@ -1620,7 +1629,7 @@ export class Scene3D {
     wm.opacity = this.waveT < 0.55 ? 0.9 * (1 - this.waveT / 0.55) : 0;
     this.wave.visible = wm.opacity > 0.01;
     this.wave.position.set(0, 0.25, -9 + (this.waveT / 0.55) * 18);
-    if (this.cage.visible) { this.cage.position.y = Math.max(0, this.cage.position.y - raw * 14); this.cage.rotation.y += raw * 0.6; }
+    if (this.cage.visible) { this.cage.position.y = Math.max(0, this.cage.position.y - raw * (this.camera.aspect < 1.25 ? 8 : 14)); this.cage.rotation.y += raw * 0.6; }
 
     this.renderer.info.reset();
     this.composer.render();
