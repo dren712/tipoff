@@ -1,6 +1,6 @@
 # Tipoff Security Attack Verification
 
-Date: 2026-11-24
+Date: 2026-11-26
 
 ## Live Test Output
 
@@ -8,12 +8,12 @@ Date: 2026-11-24
 > attack
 > tsx scripts/attack.ts
 
-Attacker keypair: 6yrvh4DFGiG88by5cpkbAk5i84emJVzD6yLNkKmv8NiV
+Attacker keypair: mXCWrwAYdzm9MhRXGUkDpKvh96jnvagjQPbcPKmePnw
 Target table: 7103 (5zLS4MjmcJ8PmyqTo5fzg9iMPoA4AQb4KwhYCNnu69sT)
-  attacker sit seat 2: 284 ms  3tWUaMPBLjdJ6EDb…
-Attacker seated at seat 2
+  attacker sit seat 0: 360 ms  2t5xjPFcS9US8eTa…
+Attacker seated at seat 0
 Waiting for live round...
-Round 9 is live! Running live attacks...
+Round 136 is live! Running live attacks...
 PASS read_sealed: rejected with no data returned (protected by TEE permissions)
 PASS trade_unowned_seat: rejected with Unauthorized (Signer is not this seat's wallet or session key)
 PASS trade_position_limit: rejected with PositionLimit (Position limit exceeded)
@@ -27,9 +27,9 @@ PASS checkpoint_unsettled_stranger: rejected with ConstraintHasOne (A has_one co
 Waiting for round to settle for attack 7...
 Round settled (phase 3). Running attack 7...
 PASS settle_twice: rejected with WrongPhase (Not allowed in this phase)
-Freeing seat 2 with stand...
-  stand: 232 ms  5sHYTLHe7xftp7Gm…
-Seat 2 freed successfully.
+Freeing seat 0 with stand...
+  stand: 346 ms  mtRBdhq8A2Porw9m…
+Seat 0 freed successfully.
 11/11 attacks rejected
 ```
 
