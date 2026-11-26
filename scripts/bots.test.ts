@@ -132,12 +132,12 @@ console.log(
 assert.ok(catchRate >= 35 && catchRate <= 65, `catchRate ${catchRate.toFixed(2)}% outside 35%..65%`);
 assert.ok(unanimityRate < 40, `unanimityRate ${unanimityRate.toFixed(2)}% >= 40%`);
 
-// Verify ALLIN=0 disables conviction votes (>= 8) while enabled allows them on clear lead > 2.
+// Verify ALLIN=0 disables conviction votes (>= 8) while enabled allows them on clear lead > 5.
 const clearTable: TableView = {
   price: 150_00000000,
   openPrice: 150_00000000,
   seats: Array.from({ length: SEATS }, () => ({ pos: 0, trades: 1, empty: false })),
-  tape: [{ seat: 3, delta: 5, t: 10 }],
+  tape: [{ seat: 3, delta: 5, t: 10 }, { seat: 3, delta: 1, t: 12 }],
   shocks: [{ at: 15, bps: 200 }, { at: 0, bps: 0 }, { at: 0, bps: 0 }, { at: 0, bps: 0 }],
 };
 const stAllIn = initBotRound(0, "follower", () => 0.9); // voteAt ~ 71.8, rng=0.9 avoids 15% abstain
