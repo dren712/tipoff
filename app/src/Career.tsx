@@ -136,7 +136,7 @@ export function Career({ session, round, chips }: {
     const idx = sorted.findIndex((e) => e.player.equals(me));
     if (idx >= 0) {
       onChainEntry = sorted[idx];
-      posLabel = `#${idx + 1} of ${board.entries.length}`;
+      posLabel = `#${idx + 1} of ${active.length}`;
     }
     const slot = round.tableId % Math.max(1, board.posted.length);
     boardHasRound = (board.posted[slot]?.toNumber() ?? 0) >= Number(round.round);
