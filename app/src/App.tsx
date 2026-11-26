@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FIRST_TABLE, PID, ROUND_SECS, SEATS, Session, TABLES, Table, ZERO, equity, explorer, fetchTable, guestKey, openSession, short, tablePda } from "./chain";
+import { FIRST_TABLE, PID, ROUND_SECS, SEATS, Session, TABLES, Table, VOTE_SECS, ZERO, equity, explorer, fetchTable, guestKey, openSession, short, tablePda } from "./chain";
 import { Avatar, SEAT_COLORS } from "./Avatar";
 import { Icon, Logo } from "./Icon";
 import { Scene3D } from "./Scene3D";
@@ -90,14 +90,14 @@ function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: numb
   const liveIdx = tables.findIndex((t) => t?.phase === 2 && t.tStart.toNumber() + ROUND_SECS > now);
   const soonestIdx = tables.reduce((best, t, i) => {
     if (!t || t.phase !== 2) return best;
-    const end = t.tStart.toNumber() + ROUND_SECS + 15;
+    const end = t.tStart.toNumber() + ROUND_SECS + VOTE_SECS;
     if (best < 0) return i;
-    const bestEnd = tables[best]!.tStart.toNumber() + ROUND_SECS + 15;
+    const bestEnd = tables[best]!.tStart.toNumber() + ROUND_SECS + VOTE_SECS;
     return end < bestEnd ? i : best;
   }, -1);
   const playIdx = quick >= 0 ? quick : soonestIdx >= 0 ? soonestIdx : Math.max(0, liveIdx);
   const allMidRound = !loading && quick < 0 && tables.some((t) => t?.phase === 2 || t?.phase === 1);
-  const soonestLeft = soonestIdx >= 0 ? Math.max(1, Math.ceil(tables[soonestIdx]!.tStart.toNumber() + ROUND_SECS + 15 - now)) : 0;
+  const soonestLeft = soonestIdx >= 0 ? Math.max(1, Math.ceil(tables[soonestIdx]!.tStart.toNumber() + ROUND_SECS + VOTE_SECS - now)) : 0;
 
   const copyFriendLink = async (i: number) => {
     const link = new URL(`#${i + 1}`, location.href).href;
