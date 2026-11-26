@@ -478,6 +478,8 @@ export class Scene3D {
   private audience!: THREE.InstancedMesh;
   private audienceColors: THREE.Color[] = [];
   private audienceTimer = 0;
+  private overheadTruss!: THREE.Mesh;
+  private overheadGoldTruss!: THREE.Mesh;
   private pitInner!: THREE.InstancedMesh;
   private pitOuter!: THREE.InstancedMesh;
   private beams: MovingBeam[] = [];
@@ -620,6 +622,8 @@ export class Scene3D {
     this.shortChevMat = new THREE.MeshBasicMaterial({ map: this.shortChevTex, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
 
     const darkMetalGeos: THREE.BufferGeometry[] = [];
+    const trussGeos: THREE.BufferGeometry[] = [];
+    const goldTrussGeos: THREE.BufferGeometry[] = [];
     const buildGate = (z: number, hex: number, text: string, near: boolean) => {
       const m = new THREE.MeshStandardMaterial({ color: 0x070a14, emissive: hex, emissiveIntensity: 1.5, roughness: 0.4, metalness: 0.6 });
       if (near) this.shortGateMat = m; else this.longGateMat = m;
@@ -642,7 +646,7 @@ export class Scene3D {
       }
       g.add(new THREE.Mesh(mergeParts(gateGeos), m));
       const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.0, 0.9), label(text, "#" + new THREE.Color(hex).getHexString()));
-      if (near) { sign.rotation.x = -Math.PI / 2; sign.position.set(0, 0.035, 8.75); sign.scale.setScalar(0.8); }
+      if (near) sign.position.set(0, 2.05, z + 0.3);
       else sign.position.set(0, 3.65, z);
       g.add(sign);
 
@@ -700,12 +704,12 @@ export class Scene3D {
     // Overhead truss ring, cross-bridge over the jumbotron, and 4 moving-head spotlight fixtures.
     const trussY = 10.15;
     const trussMat = new THREE.MeshStandardMaterial({ color: 0x1a2342, roughness: 0.42, metalness: 0.85 });
-    darkMetalGeos.push(
+    trussGeos.push(
       placed(new THREE.TorusGeometry(15.2, 0.16, 6, 32).rotateX(Math.PI / 2), 0, trussY, 0),
       placed(new THREE.TorusGeometry(14.1, 0.13, 6, 32).rotateX(Math.PI / 2), 0, trussY - 0.55, 0),
       placed(new THREE.BoxGeometry(18.5, 0.22, 0.28), 0, trussY - 0.55, -10.8),
     );
-    goldArenaGeos.push(
+    goldTrussGeos.push(
       placed(new THREE.TorusGeometry(14.65, 0.045, 6, 32).rotateX(Math.PI / 2), 0, trussY - 0.3, 0),
       placed(new THREE.BoxGeometry(18.5, 0.05, 0.32), 0, trussY - 0.68, -10.8),
     );
@@ -714,7 +718,7 @@ export class Scene3D {
     const strutGeo = new THREE.CylinderGeometry(0.06, 0.06, 1.25, 6);
     for (let i = 0; i < strutCount; i++) {
       const a = (i / strutCount) * Math.PI * 2;
-      darkMetalGeos.push(placed(strutGeo, Math.sin(a) * 14.65, trussY - 0.28, Math.cos(a) * 14.65, 0, -a, 0.55));
+      trussGeos.push(placed(strutGeo, Math.sin(a) * 14.65, trussY - 0.28, Math.cos(a) * 14.65, 0, -a, 0.55));
     }
 
     const headGeo = new THREE.CylinderGeometry(0.28, 0.36, 0.6, 10);
@@ -780,7 +784,14 @@ export class Scene3D {
     darkMetalGeos.push(placed(new THREE.BoxGeometry(14.4, 6.15, 0.52), 0, 7.35, -12.92));
     goldArenaGeos.push(placed(new THREE.BoxGeometry(14.5, 0.09, 0.56), 0, 10.42, -12.9));
     for (const sx of [-5.8, 5.8]) darkMetalGeos.push(placed(new THREE.CylinderGeometry(0.11, 0.11, 2.4, 6), sx, 9.6, -12.92));
-    this.scene.add(new THREE.Mesh(mergeParts(darkMetalGeos), frameMat), new THREE.Mesh(mergeParts(goldArenaGeos), goldTrimMat));
+    this.overheadTruss = new THREE.Mesh(mergeParts(trussGeos), frameMat);
+    this.overheadGoldTruss = new THREE.Mesh(mergeParts(goldTrussGeos), goldTrimMat);
+    this.scene.add(
+      new THREE.Mesh(mergeParts(darkMetalGeos), frameMat),
+      new THREE.Mesh(mergeParts(goldArenaGeos), goldTrimMat),
+      this.overheadTruss,
+      this.overheadGoldTruss,
+    );
     this.tickerCanvas.width = 1024;
     this.tickerCanvas.height = 56;
     this.tickerTex = new THREE.CanvasTexture(this.tickerCanvas);
@@ -1243,6 +1254,8 @@ export class Scene3D {
     this.vaultTag.visible = !(portrait && (stage === "live" || stage === "vote" || stage === "reveal"));
     const meX = v && v.me >= 0 ? laneX(v.me) : 0, me = v && v.me >= 0 ? this.bots[v.me] : undefined;
     let fov = 50;
+    this.overheadTruss.visible = stage !== "live" || portrait;
+    this.overheadGoldTruss.visible = stage !== "live" || portrait;
     if (this.orbit) {
       const sw = Math.sin(t * 0.14) * 0.65;
       if (portrait) {
@@ -1260,9 +1273,9 @@ export class Scene3D {
         this.camPos.set(0, last ? 9.6 : 9.9, 23.2 + z * 0.4);
         this.camLook.set(0, 1.15, 0);
       } else {
-        this.camPos.set(meX * 0.12, 10.6, 22.4 + z);
-        this.camLook.set(meX * 0.08, 0.95, 3.5);
-        fov = last ? 49.5 : 49;
+        this.camPos.set(meX * 0.12, 23.73, 50 + z);
+        this.camLook.set(meX * 0.08, 0.95, 0.4);
+        fov = last ? 19.6 : 19.4;
       }
     } else if (stage === "deal" && me) {
       this.camPos.set(meX + 1.6, 2.3, -4.6 * a);
