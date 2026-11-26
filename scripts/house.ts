@@ -3,10 +3,11 @@
 // It holds no special power over a round: every instruction it sends is permissionless or
 // signed by a bot's own seat key, and it cannot read the sealed accounts.
 //   npx tsx scripts/house.ts [tables] [hours]
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { lamportsDelegatedTransferIx } from "@magicblock-labs/ephemeral-rollups-sdk";
 import crypto from "crypto";
 import {
-  FEED, FIRST_TABLE, INTERMISSION, LOBBY_WAIT, MAGIC_FEE_VAULT, QUEUE, ROUND_SECS, SEATS, VOTE_SECS, botKey,
+  FEED, FIRST_TABLE, INTERMISSION, LOBBY_WAIT, MAGIC_FEE_VAULT, QUEUE, ROUND_SECS, SEATS, VOTE_SECS, base, botKey,
   housePayer as deriveHousePayer, loadAdmin, perm, program, seatMetas, seatPda, send, sleep, tablePda, teeConn,
 } from "./lib.js";
 import {
@@ -20,6 +21,30 @@ const hours = Number(process.argv[3] ?? 0);
 const started = Date.now();
 const now = () => Date.now() / 1000;
 const zero = PublicKey.default;
+async function topUpPayer() {
+  try {
+    const before = await er.getBalance(housePayer.publicKey);
+    console.log(`house payer ER balance before top-up check ${(before / 1e9).toFixed(4)} SOL`);
+    if (before < 150_000_000) {
+      const adminBalance = await base.getBalance(admin.publicKey);
+      if (adminBalance > 600_000_000) {
+        await send(base, new Transaction().add(lamportsDelegatedTransferIx(
+          admin.publicKey, housePayer.publicKey, 300_000_000n, crypto.randomBytes(32),
+        )), [admin], "top up house payer");
+      } else {
+        console.warn(`house payer top-up skipped: admin balance ${(adminBalance / 1e9).toFixed(4)} SOL`);
+      }
+    }
+  } catch (e) {
+    console.log(`house payer top-up failed: ${String(e).slice(0, 200)}`);
+  }
+  try {
+    const after = await er.getBalance(housePayer.publicKey);
+    console.log(`house payer ER balance after top-up check ${(after / 1e9).toFixed(4)} SOL`);
+  } catch (e) {
+    console.log(`house payer after-balance check failed: ${String(e).slice(0, 200)}`);
+  }
+}
 
 type Bot = { kp: Keypair; conn: Connection; state: BotRoundState; nextAt: number; plan?: any; seat: number };
 type T = { id: number; key: PublicKey; bots: Bot[]; round: number; firstHuman: number; checkpointed: number; lastCheckpointAt: number; busy: boolean; idle: Map<string, number> };
@@ -47,9 +72,8 @@ for (let n = 0; n < count; n++) {
 await connect();
 const LIVE_TABLES = Number(process.env.LIVE_TABLES ?? 1);
 console.log(`house ${admin.publicKey.toBase58()} running ${count} tables`);
-const payerBalance = await er.getBalance(housePayer.publicKey);
-console.log(`house payer ${housePayer.publicKey.toBase58()} ER balance ${(payerBalance / 1e9).toFixed(4)} SOL`);
-if (payerBalance < 50_000_000) console.warn("house payer ER balance is under 0.05 SOL");
+await topUpPayer();
+setInterval(() => { void topUpPayer(); }, 10 * 60 * 1000);
 
 const botAt = (t: T, player: PublicKey) => t.bots.find((b) => b.kp.publicKey.equals(player));
 const tx = (m: any) => m.transaction();
