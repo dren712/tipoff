@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as chainMod from "./chain";
 import {
-  FIRST_TABLE, INTERMISSION, MAX_POS, NONE, ROUND_SECS, SEATS, Session, Table, SeatPrivate, VOTE_SECS, ZERO, actions, base, equity, explorer,
+  CONVICTION, FIRST_TABLE, INTERMISSION, MAX_POS, NONE, ROUND_SECS, SEATS, Session, Table, SeatPrivate, VOTE_SECS, ZERO, actions, base, equity, explorer,
   isRumour, voteSeat,
   fetchSeat, fetchTable, ledgerPda, redraw, secretPda, seatPda, short, tablePda,
 } from "./chain";
 import { Chart } from "./Chart";
 import type { Point, Mark } from "./Chart";
+import { Evidence } from "./Evidence";
 import { Icon, Logo } from "./Icon";
 import { Avatar, SEAT_COLORS, SEAT_NAMES } from "./Avatar";
 import { isMuted, setMuted, sfx } from "./sound";
@@ -19,7 +20,7 @@ const pct = (bps: number) => `${bps > 0 ? "+" : "−"}${(Math.abs(bps) / 100).to
 const usd = (p: number) => (p / 1e8).toFixed(2);
 type Line = { ok: boolean; text: string; href?: string };
 type Pop = { id: number; delta: number };
-type Hist = { round: string; points: Point[]; marks: Mark[]; seen: number; shocks: number; phase: number };
+type Hist = { round: string; points: Point[]; marks: Mark[]; seen: number; shocks: number; phase: number; rumours: Record<number, number> };
 
 export function TableView({ session, index, autoSit = false, median, onLeave, onLatency }: { session: Session; index: number; autoSit?: boolean; median: number | null; onLeave: () => void; onLatency: (ms: number) => void }) {
   const key = useMemo(() => tablePda(FIRST_TABLE + index), [index]);
@@ -38,11 +39,12 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const [roleCard, setRoleCard] = useState<{ round: string; insider: boolean } | null>(null);
   const [stage, setStage] = useState(2); // reveal: 0 drum roll, 1 unmask, 2 scores
   const [voted, setVoted] = useState<{ round: string; suspect: number } | null>(null);
+  const [allIn, setAllIn] = useState(false);
   const [wantSit, setWantSit] = useState(autoSit);
   const [witnessedRound, setWitnessedRound] = useState("");
   const [coachRound, setCoachRound] = useState("");
   const [muted, setMute] = useState(isMuted());
-  const hist = useRef<Hist>({ round: "", points: [], marks: [], seen: 0, shocks: 0, phase: -1 });
+  const hist = useRef<Hist>({ round: "", points: [], marks: [], seen: 0, shocks: 0, phase: -1, rumours: {} });
   const rumourSeen = useRef<Map<number, number>>(new Map());
   const prevPrice = useRef(0);
   const settledPos = useRef({ round: "", pos: 0, trades: 0 });
@@ -72,7 +74,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       if (!live || !next) return;
       const round = next.round.toString();
       if (hist.current.round !== round) {
-        hist.current = { round, points: [], marks: [], seen: next.phase === 2 ? Math.max(0, next.tapeLen - next.tape.length) : next.tapeLen, shocks: next.phase === 2 ? next.shocksSeen : 0, phase: hist.current.phase };
+        hist.current = { round, points: [], marks: [], seen: next.phase === 2 ? Math.max(0, next.tapeLen - next.tape.length) : next.tapeLen, shocks: next.phase === 2 ? next.shocksSeen : 0, phase: hist.current.phase, rumours: {} };
         rumourSeen.current.clear();
         tradeRef.current = { inFlight: 0, queued: 0, busy: false };
         setIntent({ inFlight: 0, queued: 0 });
@@ -88,7 +90,11 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       const first = h.phase === -1;
       if (next.phase === 2) {
         next.shocks.forEach((s, i) => {
-          if (isRumour(s)) rumourSeen.current.set(i, Math.sign(s.bps));
+          if (isRumour(s)) {
+            const dir = Math.sign(s.bps);
+            rumourSeen.current.set(i, dir);
+            h.rumours[i] = dir;
+          }
         });
         const el = Math.min(ROUND_SECS, Date.now() / 1000 - next.tStart.toNumber());
         if (el >= 0) h.points.push({ t: el, p: next.price.toNumber() });
@@ -179,18 +185,37 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   useEffect(() => {
     voteLock.current = "";
     setVoted(null);
+    setAllIn(false);
   }, [round]);
 
-  const accuse = (i: number) => {
+  const accuse = async (i: number) => {
     if (mySeat < 0 || !canVote || busy || myVote !== null || voteLock.current === round || i === mySeat || t?.seats[i]?.player.equals(ZERO)) return;
     voteLock.current = round;
     setVoted({ round, suspect: i });
     sfx.vote();
-    run(
-      `Accused ${SEAT_NAMES[i]}`,
-      () => actions.vote(session, key, mySeat, i),
-      () => { voteLock.current = ""; setVoted((v) => (v?.round === round ? null : v)); },
-    );
+    setBusy(true);
+    try {
+      const arg = allIn ? i + CONVICTION : i;
+      const r = await actions.vote(session, key, mySeat, arg);
+      onLatency(r.ms);
+      setToast(`${allIn ? "All-in accused" : "Accused"} ${SEAT_NAMES[i]} · ${r.ms} ms`);
+    } catch (e: any) {
+      if (allIn) {
+        try {
+          const r = await actions.vote(session, key, mySeat, i);
+          onLatency(r.ms);
+          setToast("All-in not available, normal vote sent");
+          return;
+        } catch (e2: any) {
+          e = e2;
+        }
+      }
+      voteLock.current = "";
+      setVoted((v) => (v?.round === round ? null : v));
+      setToast(`Accused ${SEAT_NAMES[i]} failed: ${e?.message ?? e}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Deal the role card once per round.
@@ -626,26 +651,25 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         )}
 
         {(ui === "vote" || (ui === "live" && !seat)) && (
-          <div className={`ballot ${ui === "vote" && mySeat >= 0 && canVote && !locked ? "open" : ""} ${ui === "vote" && locked ? "locked" : ""}`}>
-            {(ui === "live" || (ui === "vote" && wantSit && mySeat < 0)) && <span className="ballot-note">{wantSit ? <><span className="spinner" /><span className="state-line">{waitState}</span></> : <><Icon name="eye" size={14} />Spectating. Seats open when this round ends.</>}</span>}
-            <div className="suspects">
-              {t.seats.map((s, i) => {
-                const empty = s.player.equals(ZERO), mine = i === mySeat, picked = ui === "vote" && myVote === i;
-                const can = ui === "vote" && mySeat >= 0 && canVote && !mine && !empty && !locked;
-                const showAct = ui === "vote" && mySeat >= 0 && !mine && !empty && (canVote || picked);
-                return (
-                  <button key={i} className={`suspect ${picked ? "picked" : ""} ${mine ? "self" : ""} ${ui === "vote" && locked && !picked ? "dim" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[i] }} disabled={!can || busy} onClick={() => accuse(i)}>
-                    <Avatar seat={i} size={38} empty={empty} />
-                    <span className="s-name">{SEAT_NAMES[i]}{mine && <em>You</em>}</span>
-                    <span className={`s-pnl num ${eq[i] >= 0 ? "up" : "down"}`}>{empty ? "–" : chips(eq[i])}</span>
-                    {picked && <span className="s-stamp"><Icon name="gavel" size={13} />Accused</span>}
-                    <span className="s-meta">{empty ? "empty" : `${s.trades} ${s.trades === 1 ? "trade" : "trades"}`}</span>
-                    {showAct && <span className="s-act">{picked ? "ACCUSED" : "Accuse"}</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <Evidence
+            seats={t.seats}
+            eq={eq}
+            marks={hist.current.marks}
+            shocks={t.shocks}
+            rumours={hist.current.rumours}
+            seatNames={SEAT_NAMES}
+            seatColors={SEAT_COLORS}
+            voting={ui === "vote"}
+            mySeat={mySeat}
+            canVote={canVote}
+            myVote={myVote}
+            locked={locked}
+            busy={busy}
+            allIn={allIn}
+            onAllInChange={setAllIn}
+            onAccuse={accuse}
+            spectateNote={(ui === "live" || (ui === "vote" && wantSit && mySeat < 0)) ? <span className="ballot-note">{wantSit ? <><span className="spinner" /><span className="state-line">{waitState}</span></> : <><Icon name="eye" size={14} />Spectating. Seats open when this round ends.</>}</span> : undefined}
+          />
         )}
 
         {ui === "reveal" && stage === 2 && (
