@@ -4,6 +4,7 @@ import { Avatar, SEAT_COLORS } from "./Avatar";
 import { Icon, Logo } from "./Icon";
 import { Scene3D } from "./Scene3D";
 import { TableView } from "./Table";
+import { Leaderboard } from "./Leaderboard";
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -69,6 +70,9 @@ const joinable = (t: Table | null | undefined) => !!t && (t.phase === 0 || t.pha
 function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: number) => void; onPlay: (i: number) => void }) {
   const [tables, setTables] = useState<(Table | null)[]>([]);
   const [now, setNow] = useState(Date.now() / 1000);
+  const [copied, setCopied] = useState<number | null>(null);
+  const [copyTick, setCopyTick] = useState(0);
+  const copyTimer = useRef<number | undefined>(undefined);
   useEffect(() => {
     let live = true;
     const load = async () => {
@@ -79,7 +83,9 @@ function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: numb
     const id = setInterval(load, 1500);
     return () => { live = false; clearInterval(id); };
   }, [session]);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
 
+  const loading = tables.length === 0 || tables.every((t) => !t);
   const quick = tables.findIndex(joinable);
   const liveIdx = tables.findIndex((t) => t?.phase === 2 && t.tStart.toNumber() + ROUND_SECS > now);
   const soonestIdx = tables.reduce((best, t, i) => {
@@ -90,6 +96,29 @@ function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: numb
     return end < bestEnd ? i : best;
   }, -1);
   const playIdx = quick >= 0 ? quick : soonestIdx >= 0 ? soonestIdx : Math.max(0, liveIdx);
+  const allMidRound = !loading && quick < 0 && tables.some((t) => t?.phase === 2 || t?.phase === 1);
+  const soonestLeft = soonestIdx >= 0 ? Math.max(1, Math.ceil(tables[soonestIdx]!.tStart.toNumber() + ROUND_SECS + 15 - now)) : 0;
+
+  const copyFriendLink = async (i: number) => {
+    const link = new URL(`#${i + 1}`, location.href).href;
+    try {
+      await navigator.clipboard.writeText(link);
+    } catch {
+      try {
+        const field = Object.assign(document.createElement("textarea"), { value: link });
+        field.setAttribute("readonly", "");
+        field.style.cssText = "position:fixed;top:0;opacity:0";
+        document.body.append(field);
+        field.select();
+        document.execCommand("copy");
+        field.remove();
+      } catch {}
+    }
+    clearTimeout(copyTimer.current);
+    setCopied(i);
+    setCopyTick((n) => n + 1);
+    copyTimer.current = window.setTimeout(() => setCopied(null), 2400);
+  };
 
   return (
     <main className="lobby">
@@ -104,13 +133,25 @@ function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: numb
 
       <section className="pitch">
         <h1>Someone on this floor already knows the news.</h1>
-        <p>Six traders. One live SOL price. Sixty seconds. One of you is secretly tipped off before every shock. Trade, then vote out the insider.</p>
+        <p>A 60-second trading game where one of six players secretly knows the news, and only a private rollup can keep that secret.</p>
         <div className="cta">
-          <button className="btn gold big" disabled={!tables.length} onClick={() => onPlay(playIdx)}>
-            <Icon name="play" size={22} />Play now
+          <button type="button" className="btn gold big" disabled={loading} onClick={() => onPlay(playIdx)}>
+            {loading ? (
+              <><span className="spinner" aria-hidden="true" />Play now</>
+            ) : allMidRound ? (
+              <><Icon name="eye" size={22} />{soonestLeft > 0 ? `Watch live, seat opens in ${soonestLeft}s` : "Watch live"}</>
+            ) : (
+              <><Icon name="play" size={22} />Play now</>
+            )}
           </button>
-          <span className="muted small">No wallet. No fees. Bots fill empty seats.</span>
+          <span className="cta-note">No wallet. No fees. Bots fill empty seats.</span>
         </div>
+        <ul className="pitch-proof" aria-label="Security proof">
+          <li><Icon name="lock" size={14} /><span>Insider picked by MagicBlock VRF inside a private rollup</span></li>
+          <li><Icon name="shield" size={14} /><a href="https://github.com/dren712/tipoff/blob/main/docs/ATTACKS.md" target="_blank" rel="noreferrer">11 of 11 live cheat attempts rejected</a></li>
+          <li><Icon name="bolt" size={14} /><span>No wallet, no fees, about half a second per move</span></li>
+        </ul>
+        <p className="pitch-built">Built on <b>Solana</b> · <b>MagicBlock Private Ephemeral Rollup</b></p>
       </section>
 
       <section className="rooms" aria-label="Tables">
@@ -126,24 +167,39 @@ function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: numb
             const st = t ? status(t, now) : null;
             const play = joinable(t);
             return (
-              <button key={i} className={`room ${st?.kind ?? "loading"}`} onClick={() => onOpen(i)} disabled={!t}>
-                <span className="room-no">{i + 1}</span>
-                <span className="room-main">
-                  <span className="room-head"><b>Table {i + 1}</b><span className="muted">Round {t ? t.round.toString() : "–"}</span></span>
-                  <span className="minis">{Array.from({ length: SEATS }, (_, k) => <Avatar key={k} seat={k} size={26} empty={!t || t.seats[k].player.equals(ZERO)} />)}</span>
-                  <span className="room-state">
-                    <i className={`dot ${st?.kind === "live" ? "on" : st?.kind === "vote" ? "hot" : ""}`} />
-                    {st ? st.label : "Loading"}{st?.kind === "live" && <em>{st.left}s</em>}
-                    <span className="muted">{seated}/{SEATS}</span>
+              <div key={i} className="room-slot">
+                <button type="button" className={`room ${st?.kind ?? "loading"}`} onClick={() => onOpen(i)} disabled={!t}>
+                  <span className="room-no">{i + 1}</span>
+                  <span className="room-main">
+                    <span className="room-head"><b>Table {i + 1}</b><span className="muted">Round {t ? t.round.toString() : "–"}</span></span>
+                    <span className="minis">{Array.from({ length: SEATS }, (_, k) => <Avatar key={k} seat={k} size={26} empty={!t || t.seats[k].player.equals(ZERO)} />)}</span>
+                    <span className="room-state">
+                      <i className={`dot ${st?.kind === "live" ? "on" : st?.kind === "vote" ? "hot" : ""}`} />
+                      {st ? st.label : "Loading"}{st?.kind === "live" && <em>{st.left}s</em>}
+                      <span className="muted">{seated}/{SEATS}</span>
+                    </span>
                   </span>
-                </span>
-                <span className={`room-go ${play ? "play" : ""}`}>{play ? "Play" : "Watch"}</span>
-              </button>
+                  <span className={`room-go ${play ? "play" : ""}`}>{play ? "Play" : "Watch"}</span>
+                </button>
+                {play && (
+                  <div className="room-actions">
+                    <button type="button" className={`room-share ${copied === i ? "copied" : ""}`} onClick={() => copyFriendLink(i)}>
+                      <Icon name={copied === i ? "check" : "link"} size={13} />
+                      <span>{copied === i ? "Link copied" : "Play with friends"}</span>
+                    </button>
+                    <span className="room-copy-sr" role="status">
+                      {copied === i ? `Link copied${copyTick % 2 ? "\u00A0" : ""}` : ""}
+                    </span>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
         <p className="fineprint">Play chips only, no real money. Runs on Solana devnet inside a MagicBlock private rollup. Program <a href={explorer("address", PID.toBase58())} target="_blank" rel="noreferrer">{short(PID)}</a></p>
       </section>
+
+      <Leaderboard session={session} />
     </main>
   );
 }
