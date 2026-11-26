@@ -15,6 +15,7 @@ import { isMuted, setMuted, sfx } from "./sound";
 import { Scene3D, Stage } from "./Scene3D";
 import "./css/onboarding.css";
 import "./css/deck.css";
+import "./css/hud.css";
 
 const chips = (n: number) => {
   const v = Math.round(n);
@@ -135,6 +136,18 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const [toast, setToast] = useState("");
   const [proof, setProof] = useState<Line[]>([]);
   const [side, setSide] = useState<"tape" | "proof" | null>(null);
+  const [moves, setMoves] = useState(0);
+  const [pulseProof, setPulseProof] = useState(() => {
+    try { return !localStorage.getItem("tipoff-proof-seen"); } catch { return true; }
+  });
+  const markProofSeen = useCallback(() => {
+    setPulseProof(false);
+    try { localStorage.setItem("tipoff-proof-seen", "1"); } catch {}
+  }, []);
+  const toggleProof = useCallback(() => {
+    setSide((s) => (s === "proof" ? null : "proof"));
+    markProofSeen();
+  }, [markProofSeen]);
   const [pops, setPops] = useState<Record<number, Pop>>({});
   const [flash, setFlash] = useState<{ id: number; bps: number; rumourTrue?: boolean } | null>(null);
   const [priceTick, setPriceTick] = useState<"" | "up" | "down">("");
@@ -292,7 +305,6 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     setBusy(true);
     try {
       const r = await fn();
-      onLatency(r.ms);
       setToast(`${label} · ${r.ms} ms`);
     } catch (e: any) {
       onFail?.();
@@ -300,7 +312,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     } finally {
       setBusy(false);
     }
-  }, [onLatency]);
+  }, []);
 
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(""), 3000); return () => clearTimeout(id); }, [toast]);
   useEffect(() => { if (!flash) return; const id = setTimeout(() => setFlash(null), 2200); return () => clearTimeout(id); }, [flash]);
@@ -334,6 +346,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       const arg = allIn ? i + CONVICTION : i;
       const r = await actions.vote(session, key, mySeat, arg);
       onLatency(r.ms);
+      setMoves((m) => m + 1);
       setToast(`${allIn ? "All-in accused" : "Accused"} ${SEAT_NAMES[i]} · ${r.ms} ms`);
     } catch (e: any) {
       const errorText = String(e?.message ?? e);
@@ -435,6 +448,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     try {
       const r = await actions.trade(session, key, lv.seatIdx, clamped);
       onLatency(r.ms);
+      setMoves((m) => m + 1);
       setToast(`${clamped > 0 ? `Bought ${clamped}` : `Sold ${-clamped}`} · ${r.ms} ms`);
       if (settledPos.current.round === lv.round && settledPos.current.trades === tradesBefore) {
         settledPos.current.pos += clamped;
@@ -709,7 +723,17 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         <div className="bar-left">
           <button className="iconbtn" onClick={onLeave} aria-label="Back to tables"><Icon name="back" /></button>
           <div className="plaque"><b>Table {index + 1}</b><span>Round {round}</span></div>
-          <span className="sealed" title="The insider, the shocks and every vote are sealed inside MagicBlock's private rollup (TEE)."><Icon name="lock" size={13} />Sealed in TEE</span>
+          <button
+            type="button"
+            className="sealed rollup-chip"
+            onClick={toggleProof}
+            aria-expanded={side === "proof"}
+            title="The insider, the shocks and every vote are sealed inside MagicBlock's private rollup (TEE). Click to try cheating."
+          >
+            <Icon name="lock" size={13} />
+            <span className="rollup-full">PRIVATE ROLLUP{median !== null ? ` · ${median} ms` : ""} · {moves} {moves === 1 ? "move" : "moves"}, 0 fees</span>
+            <span className="rollup-short">ROLLUP{median !== null ? ` · ${median} ms` : ""}</span>
+          </button>
         </div>
         <div className="bar-mid">
           {left > 0 ? (
@@ -722,9 +746,18 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         </div>
         <div className="bar-right">
           {priceBox}
-          {median !== null && <span className="ping" title="Median time for your last moves to confirm on the rollup"><Icon name="bolt" size={12} />{median} ms</span>}
           <button className={`iconbtn ${side === "tape" ? "on" : ""}`} onClick={() => setSide(side === "tape" ? null : "tape")} aria-label="Trade tape" title="Trade tape"><Icon name="tape" /></button>
-          <button className={`iconbtn ${side === "proof" ? "on" : ""}`} onClick={() => setSide(side === "proof" ? null : "proof")} aria-label="Try to cheat" title="Try to cheat"><Icon name="shield" /></button>
+          <button
+            className={`iconbtn cheatbtn ${side === "proof" ? "on" : ""} ${pulseProof ? "pulse-once" : ""}`}
+            onClick={toggleProof}
+            onAnimationEnd={markProofSeen}
+            aria-label="Try to cheat"
+            aria-expanded={side === "proof"}
+            title="Try to cheat"
+          >
+            <Icon name="shield" />
+            <span className="cheatbtn-label">Try to cheat</span>
+          </button>
           <button className="iconbtn" onClick={() => { setMuted(!muted); setMute(!muted); }} aria-label={muted ? "Turn sound on" : "Turn sound off"} title={muted ? "Sound is off" : "Sound is on"}><Icon name={muted ? "mute" : "sound"} /></button>
         </div>
       </header>
@@ -890,6 +923,10 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
             </div>
           ) : (
             <div className="drawer-body">
+              <p className="proof-lead">On a normal chain anyone could read who the insider is. Try it here.</p>
+              <div className="proof-link-row">
+                <a className="proof-link" href={explorer("address", chainMod.PID.toBase58())} target="_blank" rel="noreferrer">On-chain record <span aria-hidden="true">↗</span></a>
+              </div>
               <p className="muted small">Each button sends a real request from this browser, signed with your own key, to the rollup or to Solana.</p>
               <div className="cheats">
                 <button onClick={cheat.secret}><Icon name="eye" size={16} /><span>Read the secret</span></button>
