@@ -18,13 +18,15 @@ export type Wall = {
   future: { at: number; bps: number }[];
   title: string; sub: string;
 };
-export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boolean; insider: number; caught: boolean; canVote?: boolean; accused?: number; wall: Wall };
+export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boolean; insider: number; caught: boolean; canVote?: boolean; accused?: number; allIn?: boolean; scores?: number[]; wall: Wall };
 
 const N = 6, TILE = 1.6, GREEN = 0x3ddc97, RED = 0xff5c6c, MAGENTA = 0xff3df0, GOLD = 0xf5b83d;
 const SEAT_NAMES = ["RUBY", "AMBER", "RUSTY", "JADE", "AZURE", "VIOLET"];
 const laneX = (i: number) => (i - 2.5) * 2;
 const VAULT = new THREE.Vector3(-8.5, 4.6, -9.5);
 const AUDIENCE_MAX = 144;
+const PARTICLE_CAP = 600;
+const COIN_CAP = 380;
 
 type Bot = {
   root: THREE.Group; body: THREE.Object3D; mixer: THREE.AnimationMixer; actions: Record<string, THREE.AnimationAction>; current: string;
@@ -33,8 +35,25 @@ type Bot = {
   hold: boolean; holdEnd: boolean; moving: boolean; moveDist: number; lean: number; down: number; slump: number;
   yaw: number; trail: number; queue: string[]; dealDone: boolean; nervous: boolean; revealPending: boolean; nextGlance: number;
 };
-type Coin = { p: THREE.Vector3; v: THREE.Vector3; life: number };
+type Coin = { p: THREE.Vector3; v: THREE.Vector3; life: number; src?: THREE.Vector3; dst?: THREE.Vector3; t?: number; dur?: number; delay?: number; arcH?: number; spark?: number };
+type Particle = { p: THREE.Vector3; v: THREE.Vector3; col: THREE.Color; life: number; maxLife: number; size: number; grav: number; drag: number; grow: number };
+type Ripple = { seat: number; p: number; t: number; dur: number; col: THREE.Color };
 type MovingBeam = { pivot: THREE.Group; cone: THREE.Mesh; mat: THREE.MeshBasicMaterial; spot?: THREE.SpotLight; base: THREE.Vector3 };
+
+function createSweepTexture(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 128; c.height = 32;
+  const g = c.getContext("2d")!;
+  const grad = g.createLinearGradient(0, 0, 128, 0);
+  grad.addColorStop(0, "rgba(255, 197, 49, 0)");
+  grad.addColorStop(0.5, "rgba(255, 197, 49, 0.72)");
+  grad.addColorStop(1, "rgba(255, 197, 49, 0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 32);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 
 function label(text: string, color: string, w = 512, h = 128) {
   const c = document.createElement("canvas");
@@ -459,8 +478,28 @@ export class Scene3D {
   private maskTex = createInsiderMaskTexture();
   private coins: Coin[] = [];
   private coinMesh: THREE.InstancedMesh;
+  private particles: Particle[] = [];
+  private ptMesh: THREE.InstancedMesh;
+  private ptActive = false;
+  private ripples: Ripple[] = [];
   private wave: THREE.Mesh;
   private waveT = 9;
+  private ringWave: THREE.Mesh;
+  private ringWaveT = 9;
+  private ringWaveStrong = false;
+  private rumourSweepMesh!: THREE.Mesh;
+  private rumourSweep = 0;
+  private laserA!: THREE.Mesh;
+  private laserB!: THREE.Mesh;
+  private laserSeat = -1;
+  private accusedAllIn = false;
+  private laserFlare = 0;
+  private cageVy = 0;
+  private cageSlammed = false;
+  private payoutDone = false;
+  private fxEdge!: HTMLDivElement;
+  private fxFlash!: HTMLDivElement;
+  private fxVig!: HTMLDivElement;
   private cage = new THREE.Group();
   private nearGate = new THREE.Group();
   private longGateMat!: THREE.MeshStandardMaterial;
@@ -799,7 +838,13 @@ export class Scene3D {
     this.tickerMat = new THREE.MeshBasicMaterial({ map: this.tickerTex, toneMapped: false });
     const tickerMesh = new THREE.Mesh(new THREE.PlaneGeometry(13.6, 0.66), this.tickerMat);
     tickerMesh.position.set(0, 4.72, -12.56);
-    this.scene.add(wall, tickerMesh);
+    this.rumourSweepMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(4.4, 5.2),
+      new THREE.MeshBasicMaterial({ map: createSweepTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, opacity: 0.72 }),
+    );
+    this.rumourSweepMesh.position.set(0, 7.65, -12.52);
+    this.rumourSweepMesh.visible = false;
+    this.scene.add(wall, tickerMesh, this.rumourSweepMesh);
 
     // The Vault: the TEE set piece — black cube, rotating magenta cage rings, padlock glyph, and PRIVATE ROLLUP label.
     const cube = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.2, 2.2), new THREE.MeshStandardMaterial({ color: 0x05030a, roughness: 0.14, metalness: 0.96 }));
@@ -825,13 +870,42 @@ export class Scene3D {
     stem.position.set(VAULT.x, VAULT.y - 9.5, VAULT.z);
     this.scene.add(this.vault, this.vaultLight, this.vaultTag, stem);
 
-    // Effects.
+    // Effects: pooled coins, single 600-particle pool, shockwave ring, vote lasers, and host CSS overlays.
     const coin = new THREE.CylinderGeometry(0.13, 0.13, 0.04, 10);
-    this.coinMesh = new THREE.InstancedMesh(coin, new THREE.MeshStandardMaterial({ color: GOLD, emissive: GOLD, emissiveIntensity: 0.7, metalness: 1, roughness: 0.25 }), 260);
+    this.coinMesh = new THREE.InstancedMesh(coin, new THREE.MeshStandardMaterial({ color: GOLD, emissive: GOLD, emissiveIntensity: 0.7, metalness: 1, roughness: 0.25 }), COIN_CAP);
     this.coinMesh.frustumCulled = false;
+    this.coinMesh.visible = false;
     this.tmp.scale.setScalar(0); this.tmp.updateMatrix();
-    for (let i = 0; i < 260; i++) { this.coinMesh.setMatrixAt(i, this.tmp.matrix); this.coins.push({ p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0 }); }
+    for (let i = 0; i < COIN_CAP; i++) { this.coinMesh.setMatrixAt(i, this.tmp.matrix); this.coins.push({ p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0 }); }
+    this.ptMesh = new THREE.InstancedMesh(
+      new THREE.OctahedronGeometry(0.11, 0),
+      new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false }),
+      PARTICLE_CAP,
+    );
+    this.ptMesh.frustumCulled = false;
+    this.ptMesh.visible = false;
+    for (let i = 0; i < PARTICLE_CAP; i++) {
+      this.ptMesh.setMatrixAt(i, this.tmp.matrix);
+      this.ptMesh.setColorAt(i, this.col.set(0));
+      this.particles.push({ p: new THREE.Vector3(), v: new THREE.Vector3(), col: new THREE.Color(), life: 0, maxLife: 1, size: 1, grav: 0, drag: 1, grow: 0 });
+    }
     this.wave = new THREE.Mesh(new THREE.BoxGeometry(12.4, 0.5, 0.35), new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0 }));
+    this.ringWave = new THREE.Mesh(
+      new THREE.RingGeometry(0.68, 1.0, 48).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: GREEN, toneMapped: false, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
+    this.ringWave.position.y = 0.06;
+    this.ringWave.visible = false;
+    const laserGeo = new THREE.CylinderGeometry(1, 1, 1, 8).rotateX(Math.PI / 2);
+    this.laserA = new THREE.Mesh(laserGeo, new THREE.MeshBasicMaterial({ color: 0xff2846, toneMapped: false, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.laserB = new THREE.Mesh(laserGeo, new THREE.MeshBasicMaterial({ color: 0xff6230, toneMapped: false, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.laserA.visible = this.laserB.visible = false;
+    this.laserA.frustumCulled = this.laserB.frustumCulled = false;
+    this.scene.add(this.laserA, this.laserB);
+    this.fxEdge = document.createElement("div"); this.fxEdge.className = "fx-edge"; this.fxEdge.setAttribute("aria-hidden", "true");
+    this.fxFlash = document.createElement("div"); this.fxFlash.className = "fx-flash"; this.fxFlash.setAttribute("aria-hidden", "true");
+    this.fxVig = document.createElement("div"); this.fxVig.className = "fx-vig"; this.fxVig.setAttribute("aria-hidden", "true");
+    host.append(this.fxEdge, this.fxFlash, this.fxVig);
     const foot = new THREE.PlaneGeometry(0.62, 0.42).rotateX(-Math.PI / 2);
     this.printMesh = new THREE.InstancedMesh(foot, new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0.75, depthWrite: false }), 96);
     this.printMesh.frustumCulled = false;
@@ -848,7 +922,7 @@ export class Scene3D {
     cageGeos.push(placed(new THREE.TorusGeometry(1.15, 0.035, 8, 24).rotateX(Math.PI / 2), 0, 2.3, 0));
     this.cage.add(new THREE.Mesh(mergeParts(cageGeos), cageMat));
     this.cage.visible = false;
-    this.deck.add(this.coinMesh, this.printMesh, this.wave, this.cage, this.nearGate);
+    this.deck.add(this.coinMesh, this.ptMesh, this.printMesh, this.wave, this.ringWave, this.cage, this.nearGate);
 
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
@@ -949,7 +1023,80 @@ export class Scene3D {
     return this.lined(v.stage) ? new THREE.Vector3(laneX(i) * 0.92, 0, 6.6 + Math.abs(i - 2.5) * 0.25) : new THREE.Vector3(laneX(i), 0, -v.seats[i].pos * TILE);
   }
 
-  /// A trade landed: ring the tile under the robot.
+  private maxParticles() { return this.quality >= 2 ? PARTICLE_CAP : this.quality === 1 ? 300 : 0; }
+
+  private emit(count: number, init: (p: Particle, idx: number) => void) {
+    const cap = this.maxParticles();
+    if (cap <= 0) return;
+    let n = this.quality === 1 ? Math.ceil(count * 0.5) : count;
+    let spawned = 0;
+    for (let i = 0; i < cap && n > 0; i++) {
+      const p = this.particles[i];
+      if (p.life > 0) continue;
+      init(p, spawned++);
+      n--;
+      this.ptActive = true;
+    }
+  }
+
+  private triggerShockCss(up: boolean, strong: boolean) {
+    if (this.reducedMotion || this.quality === 0) return;
+    this.fxFlash.className = `fx-flash ${up ? "up" : "down"}${strong ? " strong" : ""}`;
+    this.fxVig.className = `fx-vig${strong ? " strong" : ""}`;
+    void this.fxFlash.offsetWidth;
+    this.fxFlash.classList.add("go");
+    this.fxVig.classList.add("go");
+  }
+
+  private arcCoin(from: THREE.Vector3, to: THREE.Vector3, delay = 0, dur = 0.55, arcH = 2.2, spark?: number) {
+    if (this.quality === 0) return;
+    for (const c of this.coins) {
+      if (c.life > 0) continue;
+      c.src = (c.src ?? new THREE.Vector3()).copy(from);
+      c.dst = (c.dst ?? new THREE.Vector3()).copy(to);
+      c.p.copy(from);
+      c.v.set(0, 0, 0);
+      c.t = 0;
+      c.dur = dur;
+      c.delay = delay;
+      c.arcH = arcH;
+      c.spark = spark;
+      c.life = delay + dur + 0.05;
+      return;
+    }
+  }
+
+  private launchPayouts(scores: number[]) {
+    if (this.quality === 0) return;
+    const losers: { i: number; amt: number }[] = [];
+    const winners: { i: number; amt: number }[] = [];
+    for (let i = 0; i < N; i++) {
+      const sc = scores[i] ?? 0;
+      if (sc < -0.5) losers.push({ i, amt: -sc });
+      else if (sc > 0.5) winners.push({ i, amt: sc });
+    }
+    const totalWin = winners.reduce((a, w) => a + w.amt, 0);
+    const totalLoss = losers.reduce((a, l) => a + l.amt, 0);
+    if (!totalWin || !totalLoss) return;
+    const totalChips = this.quality >= 2 ? 96 : 48;
+    let idx = 0;
+    for (const l of losers) {
+      const lBot = this.bots[l.i];
+      if (!lBot) continue;
+      for (const w of winners) {
+        const wBot = this.bots[w.i];
+        if (!wBot) continue;
+        const share = Math.max(1, Math.round(totalChips * (l.amt / totalLoss) * (w.amt / totalWin)));
+        for (let k = 0; k < share; k++) {
+          const from = lBot.root.position.clone().setY(0.35).add(new THREE.Vector3((Math.random() - 0.5) * 0.45, 0, (Math.random() - 0.5) * 0.45));
+          const to = wBot.root.position.clone().setY(0.45).add(new THREE.Vector3((Math.random() - 0.5) * 0.4, 0, (Math.random() - 0.5) * 0.4));
+          this.arcCoin(from, to, (idx++ % 16) * 0.025, 0.52 + Math.random() * 0.22, 1.8 + Math.random() * 1.1, k === 0 ? GOLD : undefined);
+        }
+      }
+    }
+  }
+
+  /// A trade landed: ring the tile, ripple outward two tiles, and spray seat sparks toward the gate.
   trade(seat: number, delta: number) {
     const b = this.bots[seat];
     if (!b || this.view?.stage !== "live") return;
@@ -959,17 +1106,64 @@ export class Scene3D {
     m.color.set(delta > 0 ? GREEN : RED);
     m.opacity = 1;
     b.pulse.scale.setScalar(1);
+    if (this.quality === 0) return;
+    const row = THREE.MathUtils.clamp(Math.round(-b.root.position.z / TILE), -5, 5);
+    if (this.ripples.length >= 12) this.ripples.shift();
+    this.ripples.push({ seat, p: row, t: 0, dur: 0.54, col: new THREE.Color(this.colors[seat]) });
+    const gz = delta > 0 ? -1 : 1;
+    const col = new THREE.Color(this.colors[seat]);
+    this.emit(26, (pt) => {
+      pt.p.set(b.root.position.x + (Math.random() - 0.5) * 0.55, 0.25 + Math.random() * 0.25, b.root.position.z);
+      pt.v.set((Math.random() - 0.5) * 2.4, 2.2 + Math.random() * 3.0, gz * (6.0 + Math.random() * 5.5));
+      pt.col.copy(col).multiplyScalar(1.45);
+      pt.maxLife = pt.life = 0.48 + Math.random() * 0.24;
+      pt.size = 1.65 + Math.random() * 0.75;
+      pt.grav = 6; pt.drag = 0.96; pt.grow = -0.3;
+    });
   }
 
-  /// News hits: the deck lurches, robots on the wrong side are thrown, the right side cashes in.
-  news(bps: number) {
+  /// News or rumour hits: rumour sweeps the jumbotron silently; shock lurches, flashes, rings, and awards coins.
+  news(bps: number, opts?: { rumour?: boolean; fourth?: boolean }) {
     const v = this.view;
     if (this.motionMq) this.reducedMotion = this.motionMq.matches;
-    if (!this.reducedMotion) { this.shake = 0.6; this.flash = 1; this.shockPush = 1; }
-    this.slow = 0.4; this.waveT = 0; this.tiltV += bps > 0 ? 1.6 : -1.6;
+    if (opts?.rumour) {
+      if (this.quality > 0 && !this.reducedMotion) this.rumourSweep = 1;
+      return;
+    }
+    const strong = !!opts?.fourth;
+    const mult = strong ? 2 : 1;
+    if (this.reducedMotion || this.quality === 0) {
+      this.shake = 0;
+      this.flash = 0;
+      this.shockPush = 0;
+    } else {
+      this.shake = 0.55 * mult;
+      this.flash = 1;
+      this.shockPush = 0.9 * mult;
+    }
+    this.slow = 0.4;
+    this.waveT = this.quality > 0 && !this.reducedMotion ? 0 : 9;
+    this.ringWaveT = this.quality > 0 ? 0 : 9;
+    this.ringWaveStrong = strong;
+    this.tiltV += (bps > 0 ? 1.55 : -1.55) * mult;
     this.flashColor.set(bps > 0 ? GREEN : RED);
     (this.wave.material as THREE.MeshBasicMaterial).color.copy(this.flashColor);
+    (this.ringWave.material as THREE.MeshBasicMaterial).color.copy(this.flashColor);
+    this.triggerShockCss(bps > 0, strong);
+    if (this.quality > 0) {
+      this.emit(strong ? 44 : 24, (pt, idx) => {
+        const a = (idx / (strong ? 44 : 24)) * Math.PI * 2 + Math.random() * 0.3;
+        const spd = (6 + Math.random() * 7) * (strong ? 1.35 : 1);
+        pt.p.set(Math.cos(a) * 0.6, 0.2, Math.sin(a) * 0.6);
+        pt.v.set(Math.cos(a) * spd, 2.0 + Math.random() * 3.0, Math.sin(a) * spd);
+        pt.col.copy(this.flashColor);
+        pt.maxLife = pt.life = 0.48 + Math.random() * 0.25;
+        pt.size = strong ? 1.5 : 1.1;
+        pt.grav = 5; pt.drag = 0.94; pt.grow = -0.4;
+      });
+    }
     if (!v) return;
+    const gateZ = bps > 0 ? -9.5 : 9.5;
     this.bots.forEach((b, i) => {
       const s = v.seats[i];
       if (s.empty) return;
@@ -977,7 +1171,13 @@ export class Scene3D {
       if (side > 0) {
         if (lots >= 3) this.play(b, "Dance", true); else this.playSeq(b, ["Jump", "ThumbsUp"]);
         this.express(b, null);
-        this.fountain(b.root.position, lots * 7);
+        const coinN = Math.min(28, lots * (strong ? 8 : 4));
+        const gateFrom = new THREE.Vector3(laneX(i), 1.4, gateZ);
+        for (let k = 0; k < (this.quality === 1 ? Math.ceil(coinN * 0.5) : coinN); k++) {
+          const from = gateFrom.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.1, Math.random() * 0.5, 0));
+          const to = b.root.position.clone().setY(0.35).add(new THREE.Vector3((Math.random() - 0.5) * 0.5, 0, (Math.random() - 0.5) * 0.5));
+          this.arcCoin(from, to, (k % 8) * 0.03, 0.42 + Math.random() * 0.22, 2.1 + Math.random() * 1.3, k < 2 ? GOLD : undefined);
+        }
       } else if (side < 0 && lots >= 4) {
         b.slump = 2.6;
         this.play(b, "Death", true, true); this.express(b, "Surprised"); b.down = 1.6;
@@ -989,13 +1189,17 @@ export class Scene3D {
   }
 
   private fountain(at: THREE.Vector3, n: number, behind = false) {
+    if (this.quality === 0) return;
+    const cap = this.quality === 1 ? Math.ceil(n * 0.5) : n;
+    let left = cap;
     for (const c of this.coins) {
-      if (n <= 0) break;
+      if (left <= 0) break;
       if (c.life > 0) continue;
+      c.src = undefined; c.dst = undefined; c.delay = 0; c.spark = undefined;
       c.p.set(at.x, 1.7, at.z - (behind ? 1.4 : 0));
-      c.v.set((Math.random() - 0.5) * (behind ? 2.2 : 3.2), 5 + Math.random() * 4, behind ? -0.6 - Math.random() * 1.2 : (Math.random() - 0.5) * 3.2);
+      c.v.set((Math.random() - 0.5) * (behind ? 2.6 : 3.2), 5.2 + Math.random() * 4.5, behind ? -0.6 - Math.random() * 1.3 : (Math.random() - 0.5) * 3.2);
       c.life = 1.6 + Math.random() * 0.5;
-      n--;
+      left--;
     }
   }
 
@@ -1007,7 +1211,12 @@ export class Scene3D {
     const changed = prev?.stage !== v.stage;
     if (changed) {
       this.stageAt = this.clock.elapsedTime;
-      if (v.stage === "reveal") for (const coin of this.coins) coin.life = 0;
+      if (v.stage === "reveal") {
+        for (const coin of this.coins) coin.life = 0;
+        this.cageSlammed = false;
+        this.cageVy = 0;
+        this.payoutDone = false;
+      }
       if (prev && !this.orbit) {
         this.camFromPos.copy(this.camera.position);
         this.camFromLook.copy(this.look);
@@ -1016,11 +1225,36 @@ export class Scene3D {
         this.transT = 0;
         this.transDur = v.stage === "live" ? 1.1 : v.stage === "reveal" ? 0.8 : 1.0;
       }
-      if (v.stage !== "vote") this.accused = -1;
+      if (v.stage !== "vote") {
+        this.accused = -1;
+        this.laserSeat = -1;
+        this.accusedAllIn = false;
+        this.laserFlare = 0;
+      }
     }
-    if (typeof v.accused === "number" && v.accused >= 0 && v.accused !== this.accused && this.bots[v.accused]) {
+    const wantAllIn = !!v.allIn;
+    if (v.stage === "vote" && typeof v.accused === "number" && v.accused >= 0 && (v.accused !== this.laserSeat || wantAllIn !== this.accusedAllIn) && this.bots[v.accused]) {
       this.accused = v.accused;
-      this.play(this.bots[v.accused], "No", true);
+      this.laserSeat = v.accused;
+      this.accusedAllIn = wantAllIn;
+      this.laserFlare = 1;
+      const b = this.bots[v.accused];
+      this.play(b, "No", true);
+      if (this.quality > 0) {
+        const chest = b.root.position.clone().add(new THREE.Vector3(0, 1.05, 0.3));
+        this.emit(wantAllIn ? 32 : 16, (pt) => {
+          pt.p.copy(chest);
+          pt.v.set((Math.random() - 0.5) * 4, 1 + Math.random() * 3, (Math.random() - 0.2) * 3.5);
+          pt.col.set(wantAllIn ? 0xff6230 : 0xff2846);
+          pt.maxLife = pt.life = 0.35 + Math.random() * 0.2;
+          pt.size = wantAllIn ? 1.4 : 1.0;
+          pt.grav = 4; pt.drag = 0.94; pt.grow = -0.3;
+        });
+      }
+    }
+    if (v.stage === "reveal" && v.scores && !this.payoutDone) {
+      this.payoutDone = true;
+      this.launchPayouts(v.scores);
     }
     this.tiltTo = v.stage === "live" ? THREE.MathUtils.clamp((v.wall.shocks.reduce((a, s) => a + (Math.abs(s.bps) > 1 ? s.bps : 0), 0) / 250) * 2.2, -7, 7) * (Math.PI / 180) : 0;
     this.nearGate.visible = !this.lined(v.stage);
@@ -1054,10 +1288,22 @@ export class Scene3D {
             this.express(b, v.caught ? "Angry" : null);
             if (v.caught) {
               this.playSeq(b, ["Punch", "Punch", "Sitting"], true);
-              this.cage.position.set(b.root.position.x, this.camera.aspect < 1.25 ? 2 : 6, b.root.position.z);
+              this.cage.position.set(b.root.position.x, this.camera.aspect < 1.25 ? 4.4 : 6.8, b.root.position.z);
+              this.cageVy = 0;
+              this.cageSlammed = false;
             } else {
               this.play(b, "Dance");
-              this.fountain(b.root.position, 60, true);
+              this.fountain(b.root.position, 120, true);
+              this.emit(28, (pt, idx) => {
+                const a = (idx / 28) * Math.PI * 2 + Math.random() * 0.35;
+                const r = 0.65 + Math.random() * 0.75;
+                pt.p.set(b.root.position.x + Math.cos(a) * r, 0.35 + Math.random() * 1.15, b.root.position.z - 0.15 + Math.sin(a) * r);
+                pt.v.set(Math.cos(a) * (1.8 + Math.random() * 2.0), 1.3 + Math.random() * 1.9, Math.sin(a) * (1.8 + Math.random() * 2.0));
+                pt.col.set(idx % 2 === 0 ? 0xa61fd6 : 0xe032b8).multiplyScalar(0.32);
+                pt.maxLife = pt.life = 0.9 + Math.random() * 0.45;
+                pt.size = 1.45 + Math.random() * 0.75;
+                pt.grav = -0.5; pt.drag = 0.94; pt.grow = 1.15;
+              });
             }
           } else {
             this.express(b, v.caught ? null : "Sad");
@@ -1186,6 +1432,7 @@ export class Scene3D {
 
   private applyQuality(q: number) {
     this.quality = q;
+    this.host.dataset.q = String(q);
     this.renderer.shadowMap.enabled = q >= 2;
     this.key.castShadow = q >= 2;
     for (const s of this.beamShadows) s.castShadow = q >= 2;
@@ -1196,6 +1443,23 @@ export class Scene3D {
     }
     const chestGlow = q >= 2 ? 1.6 : q === 1 ? 0.7 : 0;
     for (const bot of this.bots) if (bot.chestMat) bot.chestMat.emissiveIntensity = chestGlow;
+    const cap = this.maxParticles();
+    this.ptMesh.count = cap;
+    if (q === 0) {
+      for (let i = 0; i < PARTICLE_CAP; i++) {
+        this.particles[i].life = 0;
+        this.tmp.scale.setScalar(0); this.tmp.updateMatrix();
+        this.ptMesh.setMatrixAt(i, this.tmp.matrix);
+      }
+      this.ptMesh.instanceMatrix.needsUpdate = true;
+      this.ptMesh.visible = false;
+      this.ptActive = false;
+      this.ripples = [];
+      this.ringWave.visible = false;
+      this.rumourSweepMesh.visible = false;
+      this.laserA.visible = this.laserB.visible = false;
+      this.host.classList.remove("fx-last10");
+    }
     this.deckMat.normalMap = q > 0 ? this.brushedNormal : null;
     this.deckMat.needsUpdate = true;
     this.bloom.enabled = q > 0;
@@ -1302,7 +1566,7 @@ export class Scene3D {
       this.camLook.set(0, 3.6, -4);
     }
     if (!this.reducedMotion && this.shockPush > 0.001 && stage === "live") {
-      this.camPos.lerp(this.camLook, 0.1 * this.shockPush);
+      this.camPos.lerp(this.camLook, 0.09 * Math.min(2, this.shockPush));
     }
     this.targetFov = !this.reducedMotion && this.flash > 0.75 ? fov - 3 : fov;
   }
@@ -1356,15 +1620,30 @@ export class Scene3D {
     this.flash = this.reducedMotion ? 0 : Math.max(0, this.flash - raw * 0.9);
     this.amb.intensity += (((stage === "vote" ? 0.5 : dark ? 0.18 : 0.65) * (this.orbit ? 0.58 : 1)) - this.amb.intensity) * k;
     this.key.intensity += (((dark ? 0.15 : last ? 0.75 : 1.35) * (this.orbit ? 0.68 : 1)) - this.key.intensity) * k;
-    const beat = last && !this.reducedMotion ? Math.max(0, 1 - ((v!.wall.elapsed % 1) * 3)) : 0;
+    const cyc = last ? v!.wall.elapsed % 1 : 0;
+    const beat = last && !this.reducedMotion && this.quality > 0
+      ? Math.min(1, Math.exp(-Math.pow((cyc - 0.12) / 0.075, 2)) + 0.72 * Math.exp(-Math.pow((cyc - 0.34) / 0.075, 2)))
+      : 0;
+    this.host.classList.toggle("fx-last10", last && !this.reducedMotion && this.quality > 0);
     this.alarm.color.set(0xff3030);
     if (this.flash > 0) this.alarm.color.copy(this.flashColor);
-    this.alarm.intensity = this.reducedMotion ? 0 : this.flash * 420 + beat * 160 + (stage === "drum" ? (Math.sin(t * 14) > 0 ? 120 : 0) : 0);
+    this.alarm.intensity = this.reducedMotion ? 0 : this.flash * 420 + beat * 180 + (stage === "drum" ? (Math.sin(t * 14) > 0 ? 120 : 0) : 0);
     this.wallMat.color.setScalar((dark ? 0.45 : 1) * lobbyDim).lerp(this.flashColor, this.flash * 0.5);
     this.tickerMat.color.setScalar(lobbyDim);
     this.vaultTagMat.opacity = this.orbit ? 0.1 : 1;
     const baseBloom = this.quality >= 2 ? 0.58 : this.quality === 1 ? 0.26 : 0;
     this.bloom.strength = this.orbit ? 0.12 : baseBloom + this.flash * 0.4 + (stage === "reveal" ? 0.18 : 0);
+
+    // Rumour: soft amber sweep across the jumbotron without shake.
+    if (this.rumourSweep > 0 && this.quality > 0 && !this.reducedMotion) {
+      this.rumourSweep = Math.max(0, this.rumourSweep - raw * 1.05);
+      this.rumourSweepMesh.visible = true;
+      this.rumourSweepMesh.position.x = (1 - this.rumourSweep * 2) * 5.4;
+      (this.rumourSweepMesh.material as THREE.MeshBasicMaterial).opacity = Math.sin(this.rumourSweep * Math.PI) * 0.72 * (this.quality === 1 ? 0.6 : 1);
+    } else {
+      this.rumourSweep = 0;
+      this.rumourSweepMesh.visible = false;
+    }
 
     // Vault rotation & glow (brighter during deal and reveal, dimmed when lobby backdrop).
     const vaultHot = !this.orbit && (stage === "deal" || stage === "reveal");
@@ -1406,7 +1685,7 @@ export class Scene3D {
       this.drawTicker();
     }
 
-    // Moving-head beams: sweep in idle, lock onto gates in live, red in last 10s, focus reveal/vote.
+    // Moving-head beams: sweep in idle & drum roll, lock onto gates in live, red in last 10s, focus reveal/vote.
     if (this.quality > 0) {
       this.beams.forEach((mb, idx) => {
         const tgt = this.tmp.position;
@@ -1418,8 +1697,13 @@ export class Scene3D {
         } else if (stage === "reveal" && v && this.bots[v.insider]) {
           tgt.copy(this.bots[v.insider].root.position).setY(1.2);
           mb.mat.color.set(v.caught ? MAGENTA : RED);
-          mb.mat.opacity = 0.18;
-        } else if (stage === "vote" || stage === "drum") {
+          mb.mat.opacity = 0.2;
+        } else if (stage === "drum") {
+          const sweepX = Math.sin(t * 7.2 + idx * 1.55) * 6.5;
+          tgt.set(sweepX, 0.8, 6.6);
+          mb.mat.color.set(idx % 2 === 0 ? GOLD : MAGENTA);
+          mb.mat.opacity = this.quality >= 2 ? 0.26 : 0.15;
+        } else if (stage === "vote") {
           tgt.set((idx - 1.5) * 3.0, 0.9, 6.6);
           mb.mat.color.set(0x88b4ff);
           mb.mat.opacity = 0.11;
@@ -1434,27 +1718,47 @@ export class Scene3D {
         if (mb.spot) {
           mb.spot.target.position.copy(tgt);
           mb.spot.color.copy(mb.mat.color);
-          mb.spot.intensity = stage === "live" && last ? 46 : 32;
+          mb.spot.intensity = stage === "live" && last ? 46 : stage === "drum" ? 44 : 32;
         }
       });
     }
 
+    // Update tile ripples expanding outward two tiles + heartbeat brightness pulse in last 10 s.
+    for (let r = this.ripples.length - 1; r >= 0; r--) {
+      this.ripples[r].t += raw;
+      if (this.ripples[r].t >= this.ripples[r].dur) this.ripples.splice(r, 1);
+    }
+
     // Tiles: preserve each seat's lane colour across both halves while grading LONG green vs SHORT crimson.
     const tip = v?.insiderMe && stage === "live" ? v.wall.future.find((s) => s.at - v.wall.elapsed > 0 && s.at - v.wall.elapsed < 6) : undefined;
-    const seatBase = new THREE.Color(), dirTint = new THREE.Color();
+    const seatBase = new THREE.Color(), dirTint = new THREE.Color(), beatTint = new THREE.Color(0xff3048);
+    const qScale = this.quality >= 2 ? 1 : this.quality === 1 ? 0.5 : 0;
     for (let i = 0; i < N; i++) {
       seatBase.set(this.colors[i]);
       for (let p = -5; p <= 5; p++) {
         const s = v?.seats[i], on = s && !s.empty && s.pos === p && !dark;
         if (on) {
-          this.col.copy(seatBase).multiplyScalar(1.08);
+          this.col.copy(seatBase).multiplyScalar(1.08 + beat * 0.2 * qScale);
         } else if (p === 0) {
           this.col.copy(seatBase).multiplyScalar(dark ? 0.025 : 0.14).lerp(dirTint.set(0x162040), 0.5);
+          if (!dark && beat > 0) this.col.lerp(beatTint, beat * 0.22 * qScale);
         } else {
           dirTint.set(p > 0 ? GREEN : 0xd61e34);
           this.col.copy(seatBase).lerp(dirTint, p > 0 ? 0.42 : 0.36);
-          const amp = dark ? 0.018 : 0.11 + Math.abs(p) * 0.024 + this.flash * 0.15 + beat * 0.03;
+          const amp = dark ? 0.018 : 0.11 + Math.abs(p) * 0.024 + this.flash * 0.15 + beat * 0.26 * qScale;
           this.col.multiplyScalar(amp);
+          if (!dark && beat > 0) this.col.lerp(beatTint, beat * 0.2 * qScale);
+        }
+        if (!dark && qScale > 0 && this.ripples.length) {
+          for (const rp of this.ripples) {
+            const dist = Math.hypot(i - rp.seat, p - rp.p);
+            if (dist <= 2.2) {
+              const prog = rp.t / rp.dur;
+              const ringR = prog * 2.15;
+              const wave = Math.exp(-Math.pow((dist - ringR) * 1.9, 2)) * (1 - prog);
+              if (wave > 0.02) this.col.lerp(rp.col, Math.min(0.95, wave * 1.05 * qScale));
+            }
+          }
         }
         if (tip && i === v!.me && Math.sign(p) === Math.sign(tip.bps) && !on) this.col.lerp(new THREE.Color(MAGENTA), 0.25 + 0.25 * Math.sin(t * 9));
         this.tiles.setColorAt(i * 11 + p + 5, this.col);
@@ -1626,23 +1930,154 @@ export class Scene3D {
       this.printMesh.instanceMatrix.needsUpdate = true;
       if (this.printMesh.instanceColor) this.printMesh.instanceColor.needsUpdate = true;
     }
+    let anyCoin = false;
     this.coins.forEach((c, i) => {
       if (c.life <= 0) return;
-      c.life -= dt;
-      c.v.y -= 14 * dt;
-      c.p.addScaledVector(c.v, dt);
-      if (c.p.y < 0.05 && c.v.y < 0) { c.p.y = 0.05; c.v.y *= -0.4; c.v.x *= 0.6; c.v.z *= 0.6; }
+      anyCoin = true;
+      if (c.src && c.dst && c.dur) {
+        if (c.delay && c.delay > 0) {
+          c.delay = Math.max(0, c.delay - raw);
+          c.life -= raw;
+          this.tmp.scale.setScalar(0); this.tmp.updateMatrix();
+          this.coinMesh.setMatrixAt(i, this.tmp.matrix);
+          return;
+        }
+        c.t = (c.t ?? 0) + raw;
+        const p = Math.min(1, c.t / c.dur);
+        c.p.lerpVectors(c.src, c.dst, p);
+        c.p.y += Math.sin(p * Math.PI) * (c.arcH ?? 2.0);
+        if (p >= 1) {
+          c.life = 0;
+          if (c.spark && this.quality > 0) {
+            this.emit(5, (pt) => {
+              pt.p.copy(c.dst!);
+              pt.v.set((Math.random() - 0.5) * 2.4, 1.5 + Math.random() * 2.2, (Math.random() - 0.5) * 2.4);
+              pt.col.set(c.spark!);
+              pt.maxLife = pt.life = 0.28 + Math.random() * 0.15;
+              pt.size = 0.85; pt.grav = 5; pt.drag = 0.94; pt.grow = -0.3;
+            });
+          }
+          this.tmp.scale.setScalar(0); this.tmp.updateMatrix();
+          this.coinMesh.setMatrixAt(i, this.tmp.matrix);
+          return;
+        }
+        c.life -= raw;
+      } else {
+        c.life -= dt;
+        c.v.y -= 14 * dt;
+        c.p.addScaledVector(c.v, dt);
+        if (c.p.y < 0.05 && c.v.y < 0) { c.p.y = 0.05; c.v.y *= -0.4; c.v.x *= 0.6; c.v.z *= 0.6; }
+      }
       this.tmp.position.copy(c.p); this.tmp.rotation.set(t * 9 + i, i, t * 7); this.tmp.scale.setScalar(c.life > 0 ? Math.min(1, c.life * 3) : 0); this.tmp.updateMatrix();
       this.coinMesh.setMatrixAt(i, this.tmp.matrix);
     });
-    this.coinMesh.instanceMatrix.needsUpdate = true;
+    this.coinMesh.visible = anyCoin;
+    if (anyCoin) this.coinMesh.instanceMatrix.needsUpdate = true;
 
+    // Pooled particle mesh update (0 draw calls when idle or quality 0).
+    if (this.ptActive && this.quality > 0) {
+      let still = false;
+      const cap = this.maxParticles();
+      const dragPow = Math.pow(0.95, raw * 60);
+      for (let i = 0; i < cap; i++) {
+        const pt = this.particles[i];
+        if (pt.life <= 0) continue;
+        pt.life -= raw;
+        if (pt.life <= 0) {
+          pt.life = 0;
+          this.tmp.scale.setScalar(0); this.tmp.updateMatrix();
+          this.ptMesh.setMatrixAt(i, this.tmp.matrix);
+          continue;
+        }
+        still = true;
+        pt.v.y -= pt.grav * raw;
+        pt.v.multiplyScalar(pt.drag < 1 ? dragPow : 1);
+        pt.p.addScaledVector(pt.v, raw);
+        const f = pt.life / pt.maxLife;
+        const sc = Math.max(0.01, pt.size * (pt.grow > 0 ? 1 + (1 - f) * pt.grow : f * 0.9 + 0.1));
+        this.tmp.position.copy(pt.p);
+        this.tmp.rotation.set(i * 0.7 + t * 4, i * 1.1, t * 3);
+        this.tmp.scale.setScalar(sc);
+        this.tmp.updateMatrix();
+        this.ptMesh.setMatrixAt(i, this.tmp.matrix);
+        this.col.copy(pt.col).multiplyScalar(f * 1.15);
+        this.ptMesh.setColorAt(i, this.col);
+      }
+      this.ptMesh.visible = still;
+      this.ptActive = still;
+      this.ptMesh.instanceMatrix.needsUpdate = true;
+      if (this.ptMesh.instanceColor) this.ptMesh.instanceColor.needsUpdate = true;
+    } else {
+      this.ptMesh.visible = false;
+    }
+
+    // Vote accusation red laser beams from camera side to accused robot chest.
+    this.laserFlare = Math.max(0, this.laserFlare - raw * 1.6);
+    if (stage === "vote" && this.laserSeat >= 0 && this.bots[this.laserSeat] && this.quality > 0) {
+      const targetPos = this.bots[this.laserSeat].root.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 1.05, 0.25));
+      const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+      const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
+      const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+      const startA = this.camera.position.clone().addScaledVector(camRight, -1.6).addScaledVector(camUp, -0.7).addScaledVector(camFwd, 1.5);
+      const lenA = startA.distanceTo(targetPos);
+      this.laserA.visible = true;
+      this.laserA.position.copy(startA).lerp(targetPos, 0.5);
+      this.laserA.lookAt(targetPos);
+      const radA = (this.quality >= 2 ? 0.028 : 0.02) + this.laserFlare * 0.022;
+      this.laserA.scale.set(radA, radA, lenA);
+      (this.laserA.material as THREE.MeshBasicMaterial).opacity = 0.62 + this.laserFlare * 0.35;
+      if (this.accusedAllIn && this.quality >= 1) {
+        const startB = this.camera.position.clone().addScaledVector(camRight, 1.65).addScaledVector(camUp, -0.55).addScaledVector(camFwd, 1.4);
+        const lenB = startB.distanceTo(targetPos);
+        this.laserB.visible = true;
+        this.laserB.position.copy(startB).lerp(targetPos, 0.5);
+        this.laserB.lookAt(targetPos);
+        const radB = (this.quality >= 2 ? 0.068 : 0.048) + this.laserFlare * 0.04;
+        this.laserB.scale.set(radB, radB, lenB);
+        (this.laserB.material as THREE.MeshBasicMaterial).opacity = 0.72 + this.laserFlare * 0.26;
+      } else {
+        this.laserB.visible = false;
+      }
+    } else {
+      this.laserA.visible = this.laserB.visible = false;
+    }
+
+    // Shock wave sweep bar + expanding ground shockwave ring.
     this.waveT += raw;
     const wm = this.wave.material as THREE.MeshBasicMaterial;
     wm.opacity = this.waveT < 0.55 ? 0.9 * (1 - this.waveT / 0.55) : 0;
     this.wave.visible = wm.opacity > 0.01;
     this.wave.position.set(0, 0.25, -9 + (this.waveT / 0.55) * 18);
-    if (this.cage.visible) { this.cage.position.y = Math.max(0, this.cage.position.y - raw * (this.camera.aspect < 1.25 ? 8 : 14)); this.cage.rotation.y += raw * 0.6; }
+
+    this.ringWaveT += raw;
+    if (this.quality > 0 && this.ringWaveT < 0.62) {
+      const rp = this.ringWaveT / 0.62;
+      this.ringWave.visible = true;
+      this.ringWave.scale.setScalar(1 + rp * (this.ringWaveStrong ? 17 : 12));
+      (this.ringWave.material as THREE.MeshBasicMaterial).opacity = (this.ringWaveStrong ? 0.95 : 0.72) * (1 - rp) * (this.quality === 1 ? 0.6 : 1);
+    } else {
+      this.ringWave.visible = false;
+    }
+
+    // Reveal cage slam + base sparks on landing.
+    if (this.cage.visible) {
+      if (this.cage.position.y > 0) {
+        this.cageVy += 44 * raw;
+        this.cage.position.y = Math.max(0, this.cage.position.y - this.cageVy * raw);
+      } else if (!this.cageSlammed) {
+        this.cageSlammed = true;
+        if (!this.reducedMotion) this.shake = Math.max(this.shake, 0.25);
+        this.emit(44, (pt, idx) => {
+          const a = (idx / 44) * Math.PI * 2 + Math.random() * 0.2;
+          pt.p.set(this.cage.position.x + Math.cos(a) * 1.15, 0.12, this.cage.position.z + Math.sin(a) * 1.15);
+          pt.v.set(Math.cos(a) * (3 + Math.random() * 4), 1.5 + Math.random() * 3.2, Math.sin(a) * (3 + Math.random() * 4));
+          pt.col.set(idx % 3 === 0 ? GOLD : RED);
+          pt.maxLife = pt.life = 0.45 + Math.random() * 0.25;
+          pt.size = 1.3; pt.grav = 7; pt.drag = 0.94; pt.grow = -0.35;
+        });
+      }
+      this.cage.rotation.y += raw * 0.6;
+    }
 
     this.renderer.info.reset();
     this.composer.render();
@@ -1700,6 +2135,9 @@ export class Scene3D {
     cancelAnimationFrame(this.raf);
     this.motionMq?.removeEventListener?.("change", this.onMotion);
     if ((window as any).__tipoffScene === this) delete (window as any).__tipoffScene;
+    this.fxEdge.remove();
+    this.fxFlash.remove();
+    this.fxVig.remove();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

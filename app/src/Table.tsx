@@ -16,6 +16,7 @@ import { Scene3D, Stage } from "./Scene3D";
 import "./css/onboarding.css";
 import "./css/deck.css";
 import "./css/hud.css";
+import "./css/juice.css";
 
 const chips = (n: number) => {
   const v = Math.round(n);
@@ -155,6 +156,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const [intent, setIntent] = useState<{ inFlight: number; queued: number }>({ inFlight: 0, queued: 0 });
   const [roleCard, setRoleCard] = useState<{ round: string; insider: boolean } | null>(null);
   const [stage, setStage] = useState(2); // reveal: 0 drum roll, 1 unmask, 2 scores
+  const [scoreMul, setScoreMul] = useState(1);
   const [voted, setVoted] = useState<{ round: string; suspect: number } | null>(null);
   const [allIn, setAllIn] = useState(false);
   const [wantSit, setWantSit] = useState(autoSit);
@@ -182,6 +184,8 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const hostRef = useRef<HTMLDivElement>(null);
   const tagRefs = useRef<(HTMLElement | null)[]>([]);
   const scene = useRef<Scene3D | null>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const celebratedRef = useRef("");
   const pick = useRef<(i: number) => void>(() => {});
   const loaded = !!t;
   useEffect(() => {
@@ -216,9 +220,11 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       if (next.phase === 2) {
         next.shocks.forEach((s, i) => {
           if (isRumour(s)) {
+            const wasNew = !rumourSeen.current.has(i);
             const dir = Math.sign(s.bps);
             rumourSeen.current.set(i, dir);
             h.rumours[i] = dir;
+            if (wasNew && !first) { sfx.rumour(); scene.current?.news(s.bps, { rumour: true }); }
           }
         });
         const el = Math.min(ROUND_SECS, Date.now() / 1000 - next.tStart.toNumber());
@@ -228,7 +234,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
           const p = next.tape[k % next.tape.length];
           h.marks.push({ t: p.t, p: p.price.toNumber(), seat: p.seat, delta: p.delta });
           fresh[p.seat] = { id: k, delta: p.delta };
-          if (!first) scene.current?.trade(p.seat, p.delta);
+          if (!first && p.seat !== mySeatRef.current) scene.current?.trade(p.seat, p.delta);
           if (!first && p.seat !== mySeatRef.current) sfx.tick(p.delta > 0);
         }
         if (Object.keys(fresh).length && !first) setPops((o) => ({ ...o, ...fresh }));
@@ -240,7 +246,11 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
             const bps = sh.bps;
             const rDir = rumourSeen.current.get(idx);
             const rumourTrue = rDir !== undefined ? rDir === Math.sign(bps) : undefined;
-            if (!first) { setFlash({ id: Date.now(), bps, rumourTrue }); sfx.news(bps > 0); scene.current?.news(bps); }
+            if (!first) {
+              setFlash({ id: Date.now(), bps, rumourTrue });
+              idx === 3 ? sfx.shockBig(bps > 0) : sfx.news(bps > 0);
+              scene.current?.news(bps, { fourth: idx === 3 });
+            }
             h.shocks = next.shocksSeen;
           }
         }
@@ -275,7 +285,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         setStage(0);
         sfx.drum();
         setTimeout(() => { setStage(1); next.caught ? sfx.caught() : sfx.escaped(); }, 1600);
-        setTimeout(() => setStage(2), 4200);
+        setTimeout(() => { setStage(2); sfx.payout(); }, 4200);
       }
       h.phase = next.phase;
       setT(next);
@@ -340,7 +350,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     if (mySeat < 0 || !canVote || busy || myVote !== null || voteLock.current === round || i === mySeat || t?.seats[i]?.player.equals(ZERO)) return;
     voteLock.current = round;
     setVoted({ round, suspect: i });
-    sfx.vote();
+    sfx.gavel(allIn);
     setBusy(true);
     try {
       const arg = allIn ? i + CONVICTION : i;
@@ -484,6 +494,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     const add = nextIntent - curIntent;
     if (add === 0) return;
     sfx.mine(add > 0);
+    scene.current?.trade(lv.seatIdx, add);
     tr.queued += add;
     setIntent({ inFlight: tr.inFlight, queued: tr.queued });
     if (!tr.busy) void flushTrade();
@@ -514,8 +525,14 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     const seatedNow = t.seats.some((s) => !s.player.equals(ZERO)), hasSnap = snapRef.current?.round === round;
     const done = phase === 3 && (seatedNow || hasSnap) && witnessedRound === round;
     const st: Stage = phase === 1 ? "deal" : trading ? "live" : accusing ? "vote" : done ? (stage === 0 ? "drum" : "reveal") : "idle";
+    const myAllIn = current && current.vote !== NONE ? current.vote >= CONVICTION : allIn;
+    const sCur = snapRef.current;
+    const scores = done && stage === 2
+      ? (sCur && sCur.round === round ? sCur.seats.map((s) => s.last) : t.seats.map((s) => s.last.toNumber() / 1e6))
+      : undefined;
     scene.current.set({
       stage: st, me: mySeat, insiderMe: !!insider, insider: t.insider, caught: t.caught, canVote: accusing && mySeat >= 0 && canVote && !busy && !locked,
+      accused: myVote ?? undefined, allIn: myVote !== null ? myAllIn : undefined, scores,
       seats: t.seats.map((s) => ({ empty: s.player.equals(ZERO), pos: s.pos, mood: phase === 2 ? Math.sign(Math.round(equity(s, price, openPrice))) : 0 })),
       wall: {
         price, open: phase >= 2 ? openPrice : 0, elapsed, round: Number(round), points: hist.current.points, marks: hist.current.marks,
@@ -526,6 +543,48 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     });
   });
   pick.current = accuse;
+
+  const showScores = phase === 3 && stage === 2 && witnessedRound === round && (!!t?.seats.some((s) => !s.player.equals(ZERO)) || snap?.round === round);
+  useEffect(() => {
+    if (!showScores) { setScoreMul(1); return; }
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { setScoreMul(1); return; }
+    setScoreMul(0);
+    const start = performance.now();
+    let raf = 0;
+    const tick = (nowMs: number) => {
+      const p = Math.min(1, (nowMs - start) / 800);
+      setScoreMul(1 - Math.pow(1 - p, 3));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [showScores, round]);
+
+  useEffect(() => {
+    if (!showScores || !resultsRef.current) return;
+    const root = resultsRef.current;
+    const check = () => {
+      const careerEl = root.querySelector(".career");
+      if (!careerEl) return;
+      const rankText = careerEl.querySelector(".career-rank")?.textContent?.trim() ?? "";
+      const hasNewBest = [...careerEl.querySelectorAll(".career-delta.gold")].some((d) => d.textContent?.includes("New best"));
+      let prevRank = "";
+      try { prevRank = localStorage.getItem("tipoff-last-rank") ?? ""; } catch {}
+      const sNow = snapRef.current?.round === round ? snapRef.current : null;
+      const myWon = !!(sNow && sNow.mySeat >= 0 && ((sNow.caught && sNow.seats[sNow.mySeat]?.suspect === sNow.insider) || (!sNow.caught && sNow.insider === sNow.mySeat)));
+      const newRank = !!rankText && (prevRank ? rankText !== prevRank : (rankText !== "Rookie" && myWon));
+      if (rankText) { try { localStorage.setItem("tipoff-last-rank", rankText); } catch {} }
+      if ((hasNewBest || newRank) && celebratedRef.current !== round) {
+        celebratedRef.current = round;
+        careerEl.classList.add("career-burst");
+        sfx.boardWin();
+      }
+    };
+    check();
+    const obs = new MutationObserver(check);
+    obs.observe(root, { childList: true, subtree: true });
+    return () => obs.disconnect();
+  }, [showScores, round]);
 
   if (!t) return (
     <div className="boot">
@@ -857,12 +916,12 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         )}
 
         {ui === "reveal" && stage === 2 && curSnap && (
-          <div className="results">
+          <div className="results" ref={resultsRef}>
             <div className="results-head">
               <div className="results-summary">
                 {mySnap ? (
                   <>
-                    <span className={`you num ${Math.round(myLast) > 0 ? "up" : Math.round(myLast) < 0 ? "down" : ""}`}>You {chips(myLast)} chips</span>
+                    <span className={`you num ${Math.round(myLast) > 0 ? "up" : Math.round(myLast) < 0 ? "down" : ""}`}>You {chips(myLast * scoreMul)} chips</span>
                     <div className="breakdown" aria-label="Score breakdown">
                       {breakdown.map((b, idx) => (
                         <span key={idx} className={`bd-item num ${b.tone ?? ""}`}>{b.text}</span>
@@ -885,7 +944,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
                   <span className="s-rank">{rank + 1}</span>
                   <Avatar seat={s.seat} size={38} masked={s.seat === curSnap.insider} />
                   <span className="s-name">{s.name}{s.seat === curSnap.mySeat && <em>You</em>}</span>
-                  <span className={`s-pnl num ${Math.round(s.last) > 0 ? "up" : Math.round(s.last) < 0 ? "down" : ""}`}>{chips(s.last)}</span>
+                  <span className={`s-pnl num ${Math.round(s.last) > 0 ? "up" : Math.round(s.last) < 0 ? "down" : ""}`}>{chips(s.last * scoreMul)}</span>
                   {s.votesGot > 0 && <span className="s-votes"><Icon name="gavel" size={12} />{s.votesGot}</span>}
                   <span className="s-meta">{s.seat === curSnap.insider ? <b className="s-ins">Insider</b> : s.suspect !== NONE ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[s.suspect] }} />{SEAT_NAMES[s.suspect]}</> : "no vote"}</span>
                   {rank === 0 && <span className="s-top">Top trader</span>}

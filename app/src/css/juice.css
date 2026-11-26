@@ -1,0 +1,238 @@
+/* Brief 14: UI juice, screen flash & chromatic vignette overlays, last-10s edge vignette, career burst, and non-overlapping phone toast */
+
+#root .canvas .fx-flash,
+#root .canvas .fx-vig,
+#root .canvas .fx-edge {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+#root .canvas .fx-flash {
+  z-index: 2;
+  opacity: 0;
+}
+
+#root .canvas .fx-vig {
+  z-index: 2;
+  opacity: 0;
+}
+
+#root .canvas .fx-edge {
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.25s var(--ease);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #root .trade {
+    transition: transform 0.09s var(--ease), filter 0.12s;
+  }
+
+  #root .trade.pressed:not(:disabled),
+  #root .trade:active:not(:disabled) {
+    transform: scaleX(1.045) scaleY(0.91) translateY(3px);
+  }
+
+  #root .canvas .fx-flash.go.up {
+    animation: juiceFlashUp 120ms ease-out both;
+  }
+
+  #root .canvas .fx-flash.go.down {
+    animation: juiceFlashDown 120ms ease-out both;
+  }
+
+  #root .canvas .fx-flash.go.strong {
+    animation-duration: 150ms;
+    filter: brightness(1.25);
+  }
+
+  #root .canvas[data-q="1"] .fx-flash.go {
+    opacity: 0.55;
+  }
+
+  #root .canvas .fx-vig.go {
+    animation: juiceChromaVig 300ms ease-out both;
+  }
+
+  #root .canvas .fx-vig.go.strong {
+    animation-duration: 360ms;
+    filter: saturate(1.35);
+  }
+
+  #root .canvas.fx-last10 .fx-edge {
+    opacity: 1;
+    animation: juiceHeartbeat 1s ease-out infinite;
+    box-shadow: inset 0 0 84px rgba(255, 42, 72, 0.5), inset 0 0 26px rgba(255, 74, 102, 0.35);
+  }
+
+  #root .canvas[data-q="1"].fx-last10 .fx-edge {
+    box-shadow: inset 0 0 56px rgba(255, 42, 72, 0.32);
+  }
+
+  /* Career new rank or best streak gold burst behind panel */
+  #root .career {
+    position: relative;
+    isolation: isolate;
+  }
+
+  #root .career.career-burst::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: -14px -18px;
+    border-radius: 20px;
+    background: radial-gradient(ellipse at center, rgba(255, 197, 49, 0.55) 0%, rgba(255, 197, 49, 0.18) 48%, rgba(255, 197, 49, 0) 74%);
+    pointer-events: none;
+    animation: juiceGoldBurst 1.3s var(--ease) both;
+  }
+
+  #root .career.career-burst {
+    box-shadow: inset 0 0 0 1.5px rgba(255, 197, 49, 0.8), 0 0 28px rgba(255, 197, 49, 0.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #root .canvas .fx-flash,
+  #root .canvas .fx-vig,
+  #root .canvas .fx-edge {
+    display: none;
+    animation: none;
+  }
+
+  #root .career.career-burst::before {
+    animation: none;
+    display: none;
+  }
+
+  #root .trade.pressed:not(:disabled),
+  #root .trade:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+@keyframes juiceFlashUp {
+  0% {
+    opacity: 0.72;
+    background: radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.92), rgba(220, 255, 238, 0.65) 55%, rgba(61, 220, 151, 0.42));
+  }
+  40% {
+    opacity: 0.52;
+    background: radial-gradient(circle at 50% 45%, rgba(61, 220, 151, 0.55), rgba(31, 229, 142, 0.28) 70%, rgba(31, 229, 142, 0));
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes juiceFlashDown {
+  0% {
+    opacity: 0.72;
+    background: radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.92), rgba(255, 210, 218, 0.65) 55%, rgba(255, 74, 102, 0.45));
+  }
+  40% {
+    opacity: 0.52;
+    background: radial-gradient(circle at 50% 45%, rgba(255, 74, 102, 0.58), rgba(255, 45, 85, 0.28) 70%, rgba(255, 45, 85, 0));
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes juiceChromaVig {
+  0% {
+    opacity: 0.95;
+    box-shadow:
+      inset 10px 0 38px rgba(255, 50, 95, 0.52),
+      inset -10px 0 38px rgba(64, 215, 255, 0.5),
+      inset 0 0 70px rgba(10, 12, 34, 0.45);
+  }
+  100% {
+    opacity: 0;
+    box-shadow:
+      inset 0 0 0 rgba(255, 50, 95, 0),
+      inset 0 0 0 rgba(64, 215, 255, 0),
+      inset 0 0 0 rgba(10, 12, 34, 0);
+  }
+}
+
+@keyframes juiceHeartbeat {
+  0% { opacity: 0.28; }
+  12% { opacity: 0.96; }
+  25% { opacity: 0.36; }
+  36% { opacity: 0.78; }
+  62% { opacity: 0.22; }
+  100% { opacity: 0.28; }
+}
+
+@keyframes juiceGoldBurst {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  22% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+}
+
+/* Phone 390x844: anchor toast to bottom-right of row 2 (.stage) so it never covers clock, rumour/tip-off banners, newsflash, rolechip, or Sell/Buy */
+@media (max-width: 820px) {
+  #root .stage {
+    grid-column: 1;
+  }
+
+  #root .toast,
+  #root .ui-vote .toast,
+  #root .ui-reveal .toast {
+    grid-row: 2;
+    grid-column: 1;
+    position: relative;
+    top: auto;
+    bottom: auto;
+    left: auto;
+    right: auto;
+    transform: none;
+    justify-self: end;
+    align-self: end;
+    margin: 0 calc(8px + var(--safe-r)) 8px 0;
+    padding: 5px 10px;
+    border-radius: 8px;
+    font-size: var(--t-xs);
+    line-height: 1.15;
+    max-width: calc(100vw - 156px);
+    white-space: nowrap;
+    z-index: 15;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    #root .toast,
+    #root .ui-vote .toast,
+    #root .ui-reveal .toast {
+      animation: juicePhoneToast 0.2s var(--ease) both;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #root .toast,
+    #root .ui-vote .toast,
+    #root .ui-reveal .toast {
+      animation: none;
+    }
+  }
+}
+
+@keyframes juicePhoneToast {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
