@@ -22,9 +22,11 @@ const STACK_GAINS = [0.50, 0.55, 0.56, 0.42, 0.54, 0.48];
 const MUSIC_VOL = 0.06;
 const PRELOAD = [
   "confirmation_001", "select_003", "error_004", "glitch_002", "bong_001",
-  "lowFrequency_explosion_001", "impactMetal_002", "forceField_002", "doorOpen_001",
+  "lowFrequency_explosion_000", "lowFrequency_explosion_001", "impactMetal_002", "forceField_002", "doorOpen_001",
   "laserSmall_002", "phaserUp3", "phaserDown2", "powerUp5", "zapThreeToneDown",
   "metalLatch", "handleCoins", "begin", "tick_001", "jingle_caught", "jingle_escaped", "winner",
+  "sudden_death", "flawless_victory",
+  "chips-collide-1", "chips-collide-2", "chips-collide-3",
   "chips-stack-1", "chips-stack-2", "chips-stack-3", "chips-stack-4", "chips-stack-5", "chips-stack-6",
   "footstep00", "footstep01", "footstep02", "footstep03", "footstep04",
   "footstep05", "footstep06", "footstep07", "footstep08", "footstep09",
@@ -221,6 +223,32 @@ export const sfx = {
     { name: "jingle_escaped", gain: 0.42, at: 0.35 },
     { name: "handleCoins", gain: 0.48, at: 0.8 },
   ]),
+  rumour: () => play("glitch_002", 0.18, 0, 0.94),
+  shockBig: (up: boolean) => {
+    const now = performance.now();
+    if (now - lastNewsAt < 400) return;
+    lastNewsAt = now;
+    sequence([
+      { name: "lowFrequency_explosion_000", gain: 0.48, at: 0 },
+      { name: "lowFrequency_explosion_001", gain: 0.36, at: 0.03 },
+      { name: up ? "phaserUp3" : "phaserDown2", gain: up ? 1.45 : 1.35, at: 0.05 },
+      { name: "handleCoins", gain: 0.56, at: 0.38 },
+      { name: "chips-collide-1", gain: 0.4, at: 0.48 },
+    ]);
+  },
+  gavel: (allIn: boolean) => sequence([
+    { name: "impactMetal_002", gain: 0.48, at: 0, rate: 0.88 },
+    { name: "bong_001", gain: 0.34, at: 0.02, rate: 0.82 },
+    { name: "laserSmall_002", gain: 0.34, at: 0.07 },
+    ...(allIn ? [{ name: "sudden_death", gain: 0.3, at: 0.09 }] : []),
+  ]),
+  payout: () => sequence([
+    { name: "chips-collide-1", gain: 0.42, at: 0 },
+    { name: "chips-collide-2", gain: 0.4, at: 0.09 },
+    { name: "chips-collide-3", gain: 0.38, at: 0.19 },
+    { name: "handleCoins", gain: 0.48, at: 0.28 },
+  ]),
+  boardWin: () => play("flawless_victory", 0.32),
 };
 
 if (typeof window !== "undefined") {
