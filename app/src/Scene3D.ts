@@ -18,7 +18,7 @@ export type Wall = {
   future: { at: number; bps: number }[];
   title: string; sub: string;
 };
-export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boolean; insider: number; caught: boolean; canVote?: boolean; wall: Wall };
+export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boolean; insider: number; caught: boolean; canVote?: boolean; accused?: number; wall: Wall };
 
 const N = 6, TILE = 1.6, GREEN = 0x3ddc97, RED = 0xff5c6c, MAGENTA = 0xff3df0, GOLD = 0xf5b83d;
 const SEAT_NAMES = ["RUBY", "AMBER", "RUSTY", "JADE", "AZURE", "VIOLET"];
@@ -28,8 +28,10 @@ const AUDIENCE_MAX = 144;
 
 type Bot = {
   root: THREE.Group; body: THREE.Object3D; mixer: THREE.AnimationMixer; actions: Record<string, THREE.AnimationAction>; current: string;
-  main: THREE.MeshStandardMaterial; face?: THREE.Mesh; ring: THREE.Mesh; pulse: THREE.Mesh; spot: THREE.SpotLight; beam: THREE.Mesh;
-  hold: boolean; moving: boolean; down: number; yaw: number; trail: number;
+  main: THREE.MeshStandardMaterial; face?: THREE.Mesh; neck?: THREE.Object3D; mask?: THREE.Mesh; chestMat?: THREE.MeshStandardMaterial;
+  ring: THREE.Mesh; pulse: THREE.Mesh; spot: THREE.SpotLight; beam: THREE.Mesh;
+  hold: boolean; holdEnd: boolean; moving: boolean; moveDist: number; lean: number; down: number; slump: number;
+  yaw: number; trail: number; queue: string[]; dealDone: boolean; nervous: boolean; revealPending: boolean; nextGlance: number;
 };
 type Coin = { p: THREE.Vector3; v: THREE.Vector3; life: number };
 type MovingBeam = { pivot: THREE.Group; cone: THREE.Mesh; mat: THREE.MeshBasicMaterial; spot?: THREE.SpotLight; base: THREE.Vector3 };
@@ -153,6 +155,70 @@ function createBeveledTileGeo(w: number, h: number, bevel = 0.032): THREE.Buffer
   return geo;
 }
 
+function createChestBadgeTextures(num: number, hex: string) {
+  const c = document.createElement("canvas");
+  c.width = 128; c.height = 128;
+  const g = c.getContext("2d")!;
+  g.clearRect(0, 0, 128, 128);
+  g.fillStyle = "#080d1e";
+  g.strokeStyle = hex;
+  g.lineWidth = 8;
+  g.beginPath(); g.roundRect(10, 8, 108, 112, 16); g.fill(); g.stroke();
+  g.fillStyle = hex;
+  g.beginPath(); g.roundRect(24, 20, 80, 18, 9); g.fill();
+  g.fillStyle = "#ffffff";
+  g.beginPath(); g.roundRect(42, 24, 44, 10, 5); g.fill();
+  g.font = "900 66px Inter, system-ui, sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillStyle = "#ffffff";
+  g.fillText(String(num), 64, 78);
+  const map = new THREE.CanvasTexture(c);
+  map.colorSpace = THREE.SRGBColorSpace;
+
+  const ec = document.createElement("canvas");
+  ec.width = 128; ec.height = 128;
+  const eg = ec.getContext("2d")!;
+  eg.fillStyle = "#000000";
+  eg.fillRect(0, 0, 128, 128);
+  eg.strokeStyle = "#808080";
+  eg.lineWidth = 6;
+  eg.beginPath(); eg.roundRect(10, 8, 108, 112, 16); eg.stroke();
+  eg.fillStyle = "#ffffff";
+  eg.beginPath(); eg.roundRect(22, 18, 84, 22, 10); eg.fill();
+  const emissiveMap = new THREE.CanvasTexture(ec);
+  emissiveMap.colorSpace = THREE.SRGBColorSpace;
+  return { map, emissiveMap };
+}
+
+function createInsiderMaskTexture(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 256; c.height = 128;
+  const g = c.getContext("2d")!;
+  g.clearRect(0, 0, 256, 128);
+  g.fillStyle = "#090410";
+  g.strokeStyle = "#ff3df0";
+  g.lineWidth = 6;
+  g.beginPath();
+  g.moveTo(14, 42);
+  g.quadraticCurveTo(64, 16, 128, 44);
+  g.quadraticCurveTo(192, 16, 242, 42);
+  g.lineTo(234, 88);
+  g.quadraticCurveTo(186, 104, 128, 78);
+  g.quadraticCurveTo(70, 104, 22, 88);
+  g.closePath();
+  g.fill();
+  g.stroke();
+  g.fillStyle = "#ff4df2";
+  for (const ex of [72, 184]) {
+    g.beginPath();
+    g.ellipse(ex, 62, 26, 15, ex < 128 ? 0.14 : -0.14, 0, Math.PI * 2);
+    g.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function createFresnelTileMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     transparent: false,
@@ -185,10 +251,10 @@ function createFresnelTileMaterial(): THREE.ShaderMaterial {
       varying vec3 vInstCol;
       void main() {
         float ndv = clamp(abs(dot(normalize(vNormalV), normalize(vViewV))), 0.0, 1.0);
-        float fresnel = pow(1.0 - ndv, 2.1);
+        float fresnel = pow(1.0 - ndv, 2.3);
         float sideMask = 1.0 - smoothstep(0.65, 0.96, abs(vNormalV.y));
-        vec3 base = vInstCol * 0.72 + vec3(0.015, 0.022, 0.055);
-        vec3 edgeGlow = (vInstCol * 1.45 + vec3(0.1, 0.14, 0.28)) * (fresnel * 0.95 + sideMask * 0.65);
+        vec3 base = vInstCol * 0.88 + vec3(0.012, 0.018, 0.045);
+        vec3 edgeGlow = (vInstCol * 1.35 + vec3(0.02, 0.03, 0.06)) * (fresnel * 0.82 + sideMask * 0.65);
         gl_FragColor = vec4(base + edgeGlow, 1.0);
       }
     `,
@@ -217,10 +283,15 @@ function placed(geo: THREE.BufferGeometry, x: number, y: number, z: number, rx =
   return g;
 }
 
-function optimizeBot(body: THREE.Object3D, col: THREE.Color) {
+function optimizeBot(body: THREE.Object3D, col: THREE.Color, seatIdx: number, hexStr: string, maskTex: THREE.CanvasTexture) {
   body.updateMatrixWorld(true);
   let baseSkin: THREE.SkinnedMesh | undefined;
-  body.traverse((o) => { if (!baseSkin && (o as THREE.SkinnedMesh).isSkinnedMesh) baseSkin = o as THREE.SkinnedMesh; });
+  let neck: THREE.Object3D | undefined;
+  let chestBoneIdx = 0;
+  body.traverse((o) => {
+    if (!baseSkin && (o as THREE.SkinnedMesh).isSkinnedMesh) baseSkin = o as THREE.SkinnedMesh;
+    if (!neck && (o as THREE.Bone).isBone && o.name === "Neck") neck = o;
+  });
   let main!: THREE.MeshStandardMaterial, face: THREE.Mesh | undefined;
   const buckets = new Map<string, { mat: THREE.MeshStandardMaterial; geos: THREE.BufferGeometry[] }>();
   const toRemove: THREE.Object3D[] = [];
@@ -265,6 +336,7 @@ function optimizeBot(body: THREE.Object3D, col: THREE.Color) {
       let p: THREE.Object3D | null = mesh.parent;
       while (p && !(p as THREE.Bone).isBone) p = p.parent;
       const boneIdx = Math.max(0, p ? baseSkin.skeleton.bones.indexOf(p as THREE.Bone) : 0);
+      if (mesh.name.startsWith("Torso")) chestBoneIdx = boneIdx;
       g.applyMatrix4(invBind.clone().multiply(mesh.matrixWorld));
       const idxArr = new Uint16Array(count * 4);
       const wArr = new Float32Array(count * 4);
@@ -276,6 +348,12 @@ function optimizeBot(body: THREE.Object3D, col: THREE.Color) {
     if (!buckets.has(key)) buckets.set(key, { mat: mat.name === "Main" ? main : mat, geos: [] });
     buckets.get(key)!.geos.push(g);
     toRemove.push(mesh);
+  });
+
+  const { map, emissiveMap } = createChestBadgeTextures(seatIdx + 1, hexStr);
+  const chestMat = new THREE.MeshStandardMaterial({
+    map, emissiveMap, emissive: col.clone(), emissiveIntensity: 1.6,
+    roughness: 0.35, metalness: 0.45, transparent: true,
   });
 
   if (baseSkin && baseSkin.parent) {
@@ -291,8 +369,33 @@ function optimizeBot(body: THREE.Object3D, col: THREE.Color) {
       parent.add(sm);
       sm.bind(skel, bindMat);
     }
+    const badgeGeo = new THREE.PlaneGeometry(0.42, 0.44);
+    badgeGeo.translate(0, 0.92, 0.312);
+    badgeGeo.applyMatrix4(invBind);
+    const cnt = badgeGeo.attributes.position.count;
+    const idxArr = new Uint16Array(cnt * 4);
+    const wArr = new Float32Array(cnt * 4);
+    for (let v = 0; v < cnt; v++) { idxArr[v * 4] = chestBoneIdx; wArr[v * 4] = 1; }
+    badgeGeo.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(idxArr, 4));
+    badgeGeo.setAttribute("skinWeight", new THREE.Float32BufferAttribute(wArr, 4));
+    const badgeSm = new THREE.SkinnedMesh(badgeGeo, chestMat);
+    badgeSm.frustumCulled = false;
+    badgeSm.castShadow = false;
+    parent.add(badgeSm);
+    badgeSm.bind(skel, bindMat);
   }
-  return { main, face };
+
+  let mask: THREE.Mesh | undefined;
+  if (face?.parent) {
+    const maskGeo = new THREE.CylinderGeometry(0.0148, 0.0148, 0.0094, 12, 1, true, -0.78, 1.56);
+    maskGeo.rotateX(Math.PI / 2);
+    maskGeo.translate(0, 0, 0.0026);
+    mask = new THREE.Mesh(maskGeo, new THREE.MeshBasicMaterial({ map: maskTex, transparent: true, side: THREE.DoubleSide, toneMapped: false }));
+    mask.visible = false;
+    face.parent.add(mask);
+  }
+
+  return { main, face, neck, mask, chestMat };
 }
 
 function createSkyDome(): THREE.Mesh {
@@ -350,8 +453,10 @@ export class Scene3D {
   private brushedNormal: THREE.CanvasTexture;
   private bots: Bot[] = [];
   private tiles: THREE.InstancedMesh;
-  private prints: { m: THREE.Mesh; life: number }[] = [];
+  private printMesh!: THREE.InstancedMesh;
+  private prints: { x: number; z: number; seat: number; life: number }[] = [];
   private printAt = 0;
+  private maskTex = createInsiderMaskTexture();
   private coins: Coin[] = [];
   private coinMesh: THREE.InstancedMesh;
   private wave: THREE.Mesh;
@@ -381,6 +486,8 @@ export class Scene3D {
   private wallMat: THREE.MeshBasicMaterial;
   private tickerCanvas = document.createElement("canvas");
   private tickerTex: THREE.CanvasTexture;
+  private tickerMat!: THREE.MeshBasicMaterial;
+  private vaultTagMat!: THREE.MeshBasicMaterial;
   private tickerOffset = 0;
   private tickerDrawAt = 0;
   private tickerText = "TIPOFF EXCHANGE  •  SEALED PRIVATE ROLLUP  •  NO WALLET  •  NO FEES";
@@ -394,15 +501,24 @@ export class Scene3D {
   private camPos = new THREE.Vector3(0, 8, 22);
   private camLook = new THREE.Vector3(0, 1, 0);
   private look = new THREE.Vector3(0, 1, 0);
+  private camFromPos = new THREE.Vector3(0, 8, 22);
+  private camFromLook = new THREE.Vector3(0, 1, 0);
+  private camFromFov = 50;
+  private transT = 1;
+  private transDur = 1;
   private fov = 50;
   private shake = 0;
   private flash = 0;
+  private shockPush = 0;
   private flashColor = new THREE.Color();
   private slow = 0;
   private tilt = 0;
   private tiltV = 0;
   private tiltTo = 0;
   private stageAt = 0;
+  private lastTrader = -1;
+  private glanceAt = -10;
+  private accused = -1;
   private raf = 0;
   private ray = new THREE.Raycaster();
   private disposed = false;
@@ -442,8 +558,8 @@ export class Scene3D {
     this.key.shadow.mapSize.set(1024, 1024);
     Object.assign(this.key.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 1, far: 45 });
     this.rim.position.set(-5, 9, -15);
-    this.edgeFillL.position.set(-7.6, 0.8, 0);
-    this.edgeFillR.position.set(7.6, 0.8, 0);
+    this.edgeFillL.position.set(-7.6, 2.6, 0);
+    this.edgeFillR.position.set(7.6, 2.6, 0);
     this.alarm.position.set(0, 9, 0);
     this.scene.add(this.amb, this.key, this.rim, this.edgeFillL, this.edgeFillR, this.alarm, this.deck, this.spotL);
 
@@ -460,7 +576,7 @@ export class Scene3D {
     this.deck.add(slab);
 
     const glassTrim = new THREE.MeshStandardMaterial({
-      color: 0x3b82ff, emissive: 0x1e40af, emissiveIntensity: 0.9, roughness: 0.12, metalness: 0.2,
+      color: 0x3b82ff, emissive: 0x1e40af, emissiveIntensity: 0.85, roughness: 0.36, metalness: 0.15,
       transparent: true, opacity: 0.65,
     });
     const edgeCore = new THREE.MeshBasicMaterial({ color: 0x5aa2ff, toneMapped: false });
@@ -498,9 +614,9 @@ export class Scene3D {
 
     // Gates: lit arches at LONG (far) and SHORT (near) with animated floor chevron lanes.
     this.longChevTex = createChevronTexture("#3ddc97");
-    this.shortChevTex = createChevronTexture("#ff5c6c");
-    this.longChevMat = new THREE.MeshBasicMaterial({ map: this.longChevTex, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
-    this.shortChevMat = new THREE.MeshBasicMaterial({ map: this.shortChevTex, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    this.shortChevTex = createChevronTexture("#ff3048");
+    this.longChevMat = new THREE.MeshBasicMaterial({ map: this.longChevTex, transparent: true, opacity: 0.34, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    this.shortChevMat = new THREE.MeshBasicMaterial({ map: this.shortChevTex, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
 
     const darkMetalGeos: THREE.BufferGeometry[] = [];
     const buildGate = (z: number, hex: number, text: string, near: boolean) => {
@@ -668,7 +784,8 @@ export class Scene3D {
     this.tickerCanvas.height = 56;
     this.tickerTex = new THREE.CanvasTexture(this.tickerCanvas);
     this.tickerTex.colorSpace = THREE.SRGBColorSpace;
-    const tickerMesh = new THREE.Mesh(new THREE.PlaneGeometry(13.6, 0.66), new THREE.MeshBasicMaterial({ map: this.tickerTex, toneMapped: false }));
+    this.tickerMat = new THREE.MeshBasicMaterial({ map: this.tickerTex, toneMapped: false });
+    const tickerMesh = new THREE.Mesh(new THREE.PlaneGeometry(13.6, 0.66), this.tickerMat);
     tickerMesh.position.set(0, 4.72, -12.56);
     this.scene.add(wall, tickerMesh);
 
@@ -689,7 +806,8 @@ export class Scene3D {
     this.vault.add(cube, edges, this.vaultCore, ringA, ringB, new THREE.Mesh(mergeParts(lockGeos, true), lockMat));
     this.vault.position.copy(VAULT);
     this.vaultLight.position.copy(VAULT).add(new THREE.Vector3(0, 0.5, 2.2));
-    const tag = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 0.7), label("PRIVATE ROLLUP", "#ff9af9", 768, 128));
+    this.vaultTagMat = label("PRIVATE ROLLUP", "#ff9af9", 768, 128);
+    const tag = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 0.7), this.vaultTagMat);
     tag.position.set(VAULT.x, VAULT.y + 2.25, VAULT.z);
     const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 16), new THREE.MeshBasicMaterial({ color: 0x6a1d7a, toneMapped: false }));
     stem.position.set(VAULT.x, VAULT.y - 9.5, VAULT.z);
@@ -703,9 +821,12 @@ export class Scene3D {
     for (let i = 0; i < 260; i++) { this.coinMesh.setMatrixAt(i, this.tmp.matrix); this.coins.push({ p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0 }); }
     this.wave = new THREE.Mesh(new THREE.BoxGeometry(12.4, 0.5, 0.35), new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0 }));
     const foot = new THREE.PlaneGeometry(0.62, 0.42).rotateX(-Math.PI / 2);
+    this.printMesh = new THREE.InstancedMesh(foot, new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0.75, depthWrite: false }), 96);
+    this.printMesh.frustumCulled = false;
     for (let i = 0; i < 96; i++) {
-      const m = new THREE.Mesh(foot, new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0, depthWrite: false }));
-      m.visible = false; this.deck.add(m); this.prints.push({ m, life: 0 });
+      this.printMesh.setMatrixAt(i, this.tmp.matrix);
+      this.printMesh.setColorAt(i, this.col.set(0));
+      this.prints.push({ x: 0, z: 0, seat: 0, life: 0 });
     }
     const cageMat = new THREE.MeshBasicMaterial({ color: RED, toneMapped: false });
     const cageGeos: THREE.BufferGeometry[] = [];
@@ -715,7 +836,7 @@ export class Scene3D {
     cageGeos.push(placed(new THREE.TorusGeometry(1.15, 0.035, 8, 24).rotateX(Math.PI / 2), 0, 2.3, 0));
     this.cage.add(new THREE.Mesh(mergeParts(cageGeos), cageMat));
     this.cage.visible = false;
-    this.deck.add(this.coinMesh, this.wave, this.cage, this.nearGate);
+    this.deck.add(this.coinMesh, this.printMesh, this.wave, this.cage, this.nearGate);
 
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
@@ -740,7 +861,7 @@ export class Scene3D {
     for (let i = 0; i < N; i++) {
       const root = new THREE.Group(), body = cloneSkinned(gltf.scene), col = new THREE.Color(this.colors[i]);
       body.scale.setScalar(0.45);
-      const { main, face } = optimizeBot(body, col);
+      const { main, face, neck, mask, chestMat } = optimizeBot(body, col, i, this.colors[i], this.maskTex);
       root.add(body);
       root.position.set(laneX(i), 0, 0);
       root.rotation.y = Math.PI;
@@ -757,26 +878,50 @@ export class Scene3D {
       this.scene.add(beam);
       const mixer = new THREE.AnimationMixer(body), actions: Record<string, THREE.AnimationAction> = {};
       for (const clip of gltf.animations) actions[clip.name] = mixer.clipAction(clip);
-      actions.Idle.time = Math.random() * 2;
+      actions.Idle.time = Math.random() * 3.33;
       actions.Idle.play();
-      const bot: Bot = { root, body, mixer, actions, current: "Idle", main, face, ring, pulse, spot, beam, hold: false, moving: false, down: 0, yaw: Math.PI, trail: 0 };
-      mixer.addEventListener("finished", () => { if (!bot.hold) this.play(bot, "Idle"); });
+      const bot: Bot = {
+        root, body, mixer, actions, current: "Idle", main, face, neck, mask, chestMat, ring, pulse, spot, beam,
+        hold: false, holdEnd: false, moving: false, moveDist: 0, lean: 0, down: 0, slump: 0, yaw: Math.PI, trail: 0,
+        queue: [], dealDone: false, nervous: false, revealPending: false, nextGlance: 2 + Math.random() * 4,
+      };
+      mixer.addEventListener("finished", () => {
+        if (bot.queue.length > 0) {
+          const nextClip = bot.queue.shift()!;
+          const isFinalHold = bot.queue.length === 0 && bot.holdEnd;
+          this.play(bot, nextClip, !isFinalHold, isFinalHold);
+          if (nextClip === "Sitting" && this.view?.stage === "reveal") this.express(bot, "Sad");
+        } else if (!bot.hold) {
+          this.play(bot, "Idle", false, false, bot.nervous ? 1.3 : 1);
+        }
+      });
       this.bots.push(bot);
     }
     this.ready = true;
+    this.applyQuality(this.quality);
     if (this.view) this.set(this.view);
   }
 
-  private play(b: Bot, name: string, once = false, hold = false) {
-    if (b.current === name && !once) return;
+  private play(b: Bot, name: string, once = false, hold = false, speed = 1) {
     const next = b.actions[name], prev = b.actions[b.current];
+    if (!next) return;
+    if (b.current === name && !once) { next.timeScale = speed; return; }
     next.reset();
+    next.timeScale = speed;
     next.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, once ? 1 : Infinity);
     next.clampWhenFinished = hold;
     b.hold = hold;
-    if (prev !== next) next.crossFadeFrom(prev, 0.15, false);
+    if (prev && prev !== next) next.crossFadeFrom(prev, 0.2, false);
     next.play();
     b.current = name;
+  }
+
+  private playSeq(b: Bot, seq: string[], holdEnd = false) {
+    if (!seq.length) return;
+    b.holdEnd = holdEnd;
+    b.queue = seq.slice(1);
+    const singleHold = b.queue.length === 0 && holdEnd;
+    this.play(b, seq[0], true, singleHold);
   }
 
   private express(b: Bot, name: "Angry" | "Surprised" | "Sad" | null) {
@@ -796,6 +941,8 @@ export class Scene3D {
   trade(seat: number, delta: number) {
     const b = this.bots[seat];
     if (!b || this.view?.stage !== "live") return;
+    this.lastTrader = seat;
+    this.glanceAt = this.clock.elapsedTime;
     const m = b.pulse.material as THREE.MeshBasicMaterial;
     m.color.set(delta > 0 ? GREEN : RED);
     m.opacity = 1;
@@ -806,7 +953,7 @@ export class Scene3D {
   news(bps: number) {
     const v = this.view;
     if (this.motionMq) this.reducedMotion = this.motionMq.matches;
-    if (!this.reducedMotion) { this.shake = 0.6; this.flash = 1; }
+    if (!this.reducedMotion) { this.shake = 0.6; this.flash = 1; this.shockPush = 1; }
     this.slow = 0.4; this.waveT = 0; this.tiltV += bps > 0 ? 1.6 : -1.6;
     this.flashColor.set(bps > 0 ? GREEN : RED);
     (this.wave.material as THREE.MeshBasicMaterial).color.copy(this.flashColor);
@@ -816,12 +963,16 @@ export class Scene3D {
       if (s.empty) return;
       const side = Math.sign(s.pos) * Math.sign(bps), lots = Math.abs(s.pos);
       if (side > 0) {
-        this.play(b, lots >= 3 ? "ThumbsUp" : "Jump", true); this.express(b, null);
+        if (lots >= 3) this.play(b, "Dance", true); else this.playSeq(b, ["Jump", "ThumbsUp"]);
+        this.express(b, null);
         this.fountain(b.root.position, lots * 7);
       } else if (side < 0 && lots >= 4) {
-        this.play(b, "Death", true, true); this.express(b, "Surprised"); b.down = 1.3;
-      } else if (side < 0) { this.play(b, "No", true); this.express(b, "Sad"); }
-      else this.play(b, "Jump", true);
+        b.slump = 2.6;
+        this.play(b, "Death", true, true); this.express(b, "Surprised"); b.down = 1.6;
+      } else if (side < 0) {
+        b.slump = 3.2;
+        this.play(b, "No", true); this.express(b, "Sad");
+      } else this.play(b, "Jump", true);
     });
   }
 
@@ -842,7 +993,22 @@ export class Scene3D {
     if (v.stage !== "vote" || v.canVote === false) { this.hot = -1; this.renderer.domElement.style.cursor = ""; }
     if (!this.ready) { this.drawWall(v.wall, v.stage); return; }
     const changed = prev?.stage !== v.stage;
-    if (changed) this.stageAt = this.clock.elapsedTime;
+    if (changed) {
+      this.stageAt = this.clock.elapsedTime;
+      if (prev && !this.orbit) {
+        this.camFromPos.copy(this.camera.position);
+        this.camFromLook.copy(this.look);
+        this.camFromFov = this.fov;
+        if (v.stage === "live") this.camFromPos.y = Math.max(this.camFromPos.y, 13.5);
+        this.transT = 0;
+        this.transDur = v.stage === "live" ? 1.1 : v.stage === "reveal" ? 0.8 : 1.0;
+      }
+      if (v.stage !== "vote") this.accused = -1;
+    }
+    if (typeof v.accused === "number" && v.accused >= 0 && v.accused !== this.accused && this.bots[v.accused]) {
+      this.accused = v.accused;
+      this.play(this.bots[v.accused], "No", true);
+    }
     this.tiltTo = v.stage === "live" ? THREE.MathUtils.clamp((v.wall.shocks.reduce((a, s) => a + (Math.abs(s.bps) > 1 ? s.bps : 0), 0) / 250) * 2.2, -7, 7) * (Math.PI / 180) : 0;
     this.nearGate.visible = !this.lined(v.stage);
     this.cage.visible = v.stage === "reveal" && v.caught && !!this.bots[v.insider];
@@ -855,32 +1021,42 @@ export class Scene3D {
       rm.opacity = i === v.me ? 0.95 : 0;
       b.ring.visible = rm.opacity > 0.01;
       rm.color.set(i === v.me && v.insiderMe ? MAGENTA : col);
+      if (b.mask) b.mask.visible = v.stage === "reveal" && i === v.insider;
       if (changed || (v.stage !== "reveal" && prev?.seats[i].empty !== s.empty)) {
         b.main.color.copy(col);
         b.main.emissive.set(0);
         b.down = 0;
+        b.slump = 0;
+        b.queue = [];
+        b.holdEnd = false;
+        b.nervous = false;
+        b.dealDone = false;
+        b.revealPending = false;
         this.express(b, null);
         if (!b.moving) this.play(b, "Idle");
-        if (v.stage === "deal") this.play(b, "Standing", true);
+        if (v.stage === "deal") this.play(b, "Standing", true, true);
         if (v.stage === "drum") this.express(b, "Surprised");
         if (v.stage === "reveal") {
           if (i === v.insider) {
-            b.main.color.set(0x14060f);
-            b.main.emissive.set(MAGENTA).multiplyScalar(0.55);
-            this.express(b, v.caught ? "Sad" : "Angry");
-            v.caught ? this.play(b, "Death", true, true) : this.play(b, "Dance");
-            if (v.caught) this.cage.position.set(b.root.position.x, 6, b.root.position.z); else this.fountain(b.root.position, 60);
+            this.express(b, v.caught ? "Angry" : null);
+            if (v.caught) {
+              this.playSeq(b, ["Punch", "Punch", "Sitting"], true);
+              this.cage.position.set(b.root.position.x, 6, b.root.position.z);
+            } else {
+              this.play(b, "Dance");
+              this.fountain(b.root.position, 60);
+            }
           } else {
             this.express(b, v.caught ? null : "Sad");
-            setTimeout(() => this.view?.stage === "reveal" && this.play(b, v.caught ? "Jump" : "No", true), 300 + i * 90);
+            b.revealPending = true;
           }
         }
-      } else if (v.stage === "live" && b.current === "Idle") this.express(b, s.mood < 0 ? "Sad" : null);
+      } else if (v.stage === "live" && b.current === "Idle" && b.slump <= 0) this.express(b, s.mood < 0 ? "Sad" : null);
     });
     this.longGateMat.emissiveIntensity = 1.15 + longs * 0.35;
     this.shortGateMat.emissiveIntensity = 1.15 + shorts * 0.35;
-    this.longChevMat.opacity = Math.min(1, 0.32 + longs * 0.16);
-    this.shortChevMat.opacity = Math.min(1, 0.32 + shorts * 0.16);
+    this.longChevMat.opacity = Math.min(0.9, 0.24 + longs * 0.13);
+    this.shortChevMat.opacity = Math.min(0.85, 0.22 + shorts * 0.12);
     this.drawWall(v.wall, v.stage);
   }
 
@@ -1000,16 +1176,20 @@ export class Scene3D {
     this.renderer.shadowMap.enabled = q >= 2;
     this.key.castShadow = q >= 2;
     for (const s of this.beamShadows) s.castShadow = q >= 2;
-    this.audience.count = q >= 2 ? AUDIENCE_MAX : Math.floor(AUDIENCE_MAX / 2);
+    this.audience.count = q >= 2 ? AUDIENCE_MAX : q === 1 ? Math.floor(AUDIENCE_MAX / 2) : Math.floor(AUDIENCE_MAX / 3);
     for (const b of this.beams) {
       b.cone.visible = q > 0;
       if (b.spot) b.spot.intensity = q > 0 ? 32 : 0;
     }
+    const chestGlow = q >= 2 ? 1.6 : q === 1 ? 0.7 : 0;
+    for (const bot of this.bots) if (bot.chestMat) bot.chestMat.emissiveIntensity = chestGlow;
     this.deckMat.normalMap = q > 0 ? this.brushedNormal : null;
     this.deckMat.needsUpdate = true;
     this.bloom.enabled = q > 0;
-    this.renderer.setPixelRatio(q >= 2 ? Math.min(devicePixelRatio, 2) : q === 1 ? 1 : 0.75);
-    this.composer.setPixelRatio(q >= 2 ? Math.min(devicePixelRatio, 2) : q === 1 ? 1 : 0.75);
+    this.bloom.strength = q >= 2 ? 0.58 : q === 1 ? 0.26 : 0;
+    const dpr = q >= 2 ? Math.min(devicePixelRatio, 2) : q === 0 && this.lowDpr ? 0.75 : 1;
+    this.renderer.setPixelRatio(dpr);
+    this.composer.setPixelRatio(dpr);
     this.resize();
   }
 
@@ -1024,13 +1204,23 @@ export class Scene3D {
   private hot = -1;
   private spotL = new THREE.SpotLight(0xffffff, 0, 24, 0.3, 0.6, 1.1);
   private quality = 2;
+  private lowDpr = false;
+  private lowFpsSecs = 0;
   private frames = 0;
   private spent = 0;
   private warmupFrames = 0;
   private badWindows = 0;
+  private targetFov = 50;
   /// Renderer facts for the proof panel and QA.
   stats() { const i = this.renderer.info; return { quality: this.quality, calls: i.render.calls, triangles: i.render.triangles, ratio: this.renderer.getPixelRatio() }; }
-  private click = (e: MouseEvent) => { const s = this.pick(e); if (s >= 0 && this.view?.stage === "vote" && this.view.canVote !== false && s !== this.view.me && !this.view.seats[s].empty) this.onPick(s); };
+  private click = (e: MouseEvent) => {
+    const s = this.pick(e);
+    if (s >= 0 && this.view?.stage === "vote" && this.view.canVote !== false && s !== this.view.me && !this.view.seats[s].empty) {
+      this.accused = s;
+      if (this.bots[s]) this.play(this.bots[s], "No", true);
+      this.onPick(s);
+    }
+  };
   private hover = (e: PointerEvent) => {
     const s = this.view?.stage === "vote" && this.view.canVote !== false ? this.pick(e) : -1;
     this.hot = s >= 0 && s !== this.view!.me && !this.view!.seats[s].empty ? s : -1;
@@ -1051,36 +1241,55 @@ export class Scene3D {
     const meX = v && v.me >= 0 ? laneX(v.me) : 0, me = v && v.me >= 0 ? this.bots[v.me] : undefined;
     let fov = 50;
     if (this.orbit) {
-      const sw = Math.sin(t * 0.14) * 0.95;
-      this.camPos.set(Math.sin(sw) * 19 * a, portrait ? 8.2 : 7.4, Math.cos(sw) * 19 * a);
-      this.camLook.set(0, 2.7, -3.5);
-    }
-    else if (stage === "live") {
-      const last = v!.wall.elapsed >= 50, z = me ? Math.max(0, me.root.position.z) * 0.08 : 0;
+      const sw = Math.sin(t * 0.14) * 0.65;
       if (portrait) {
-        fov = last ? 60 : 58;
-        const minZ = 9.5 + 11.7 / Math.max(0.5, aspect);
-        this.camPos.set(0, last ? 10.2 : 10.6, Math.max(19.4, minZ) + z * 0.6);
-        this.camLook.set(0, 2.0, -0.5);
+        this.camPos.set(Math.sin(sw) * 16 * a, 9.2, Math.cos(sw) * 17 * a);
+        this.camLook.set(0, 2.2, -2.5);
       } else {
-        this.camPos.set(meX * 0.12, 6.9, 22.8 + z);
-        this.camLook.set(meX * 0.08, 2.15, -0.5);
-        fov = last ? 44 : 43;
+        this.camPos.set(Math.sin(sw) * 12, 13.8, Math.cos(sw) * 19.2);
+        this.camLook.set(0, -1.0, 1.0);
+        fov = 44;
       }
-    } else if (stage === "deal" && me) { this.camPos.set(meX + 1.6, 2.1, -4.6 * a); this.camLook.set(meX, 1.5, 0); }
-    else if (stage === "vote" || stage === "drum") {
-      fov = portrait ? 56 : 54;
+    } else if (stage === "live") {
+      const last = v!.wall.elapsed >= 50, z = me ? Math.max(0, me.root.position.z) * 0.06 : 0;
+      if (portrait) {
+        fov = last ? 39 : 38;
+        this.camPos.set(0, last ? 9.6 : 9.9, 23.2 + z * 0.4);
+        this.camLook.set(0, 1.15, 0);
+      } else {
+        this.camPos.set(meX * 0.12, 10.6, 21.4 + z);
+        this.camLook.set(meX * 0.08, 0.95, 0.4);
+        fov = last ? 49.5 : 49;
+      }
+    } else if (stage === "deal" && me) {
+      this.camPos.set(meX + 1.6, 2.3, -4.6 * a);
+      this.camLook.set(meX, 1.4, 0);
+    } else if (stage === "vote" || stage === "drum") {
+      fov = portrait ? 56 : 52;
       const minDz = 6.3 / (Math.tan((fov * Math.PI) / 360) * aspect);
-      this.camPos.set(this.hot >= 0 ? laneX(this.hot) * 0.12 : 0, portrait ? 2.9 : 2.55, 7.225 + Math.max(9.6, minDz));
-      this.camLook.set(0, portrait ? 2.3 : 2.15, 6.6);
+      const dolly = stage === "vote" ? Math.sin((t - this.stageAt) * 0.28) * 1.6 : 0;
+      const focus = this.hot >= 0 ? laneX(this.hot) * 0.35 : dolly * 0.65;
+      this.camPos.set(focus, portrait ? 3.0 : 2.65, 7.2 + Math.max(9.6, minDz));
+      this.camLook.set(dolly * 0.35 + (this.hot >= 0 ? laneX(this.hot) * 0.15 : 0), portrait ? 2.2 : 2.1, 6.6);
     } else if (stage === "reveal" && this.bots[v!.insider]) {
-      const p = this.bots[v!.insider].root.position, k = Math.min(1, (t - this.stageAt) / 1.5);
-      const back = portrait ? Math.max(10.2, 6.8 / Math.max(0.55, aspect)) - 0.6 * k : 10.2 - 0.9 * k;
-      this.camPos.set(p.x * 0.72, portrait ? 3.0 : 2.85, p.z + back);
-      this.camLook.set(p.x * 0.52, portrait ? 2.1 : 2.05, p.z);
-      fov = portrait ? 60 : 56;
-    } else { this.camPos.set(Math.sin(t * 0.2) * 2.5, 6.2, 15 * a); this.camLook.set(0, 3.6, -4); }
-    this.fov += ((this.flash > 0.75 && !this.reducedMotion ? fov - 6 : fov) - this.fov) * 0.12;
+      const p = this.bots[v!.insider].root.position;
+      const el = t - this.stageAt;
+      const orbitAngle = Math.max(0, el - 0.85) * 0.28;
+      const orbitPan = Math.sin(orbitAngle) * (portrait ? 0.6 : 1.45);
+      fov = portrait ? 58 : 54;
+      const camX = (portrait ? p.x * 0.22 : p.x * 0.62) + orbitPan;
+      const minBack = (6.7 + Math.abs(camX)) / (Math.tan((fov * Math.PI) / 360) * aspect * 0.94);
+      const back = portrait ? Math.max(10.5, minBack) : 9.4;
+      this.camPos.set(camX, portrait ? 3.1 : 2.85, p.z + back);
+      this.camLook.set(portrait ? p.x * 0.18 : p.x * 0.48, portrait ? 1.95 : 2.0, p.z);
+    } else {
+      this.camPos.set(Math.sin(t * 0.2) * 2.5, 6.2, 15 * a);
+      this.camLook.set(0, 3.6, -4);
+    }
+    if (!this.reducedMotion && this.shockPush > 0.001 && stage === "live") {
+      this.camPos.lerp(this.camLook, 0.1 * this.shockPush);
+    }
+    this.targetFov = !this.reducedMotion && this.flash > 0.75 ? fov - 3 : fov;
   }
 
   private loop = () => {
@@ -1095,9 +1304,19 @@ export class Scene3D {
     const stage = v?.stage ?? "idle", dark = this.lined(stage), last = stage === "live" && v!.wall.elapsed >= 50;
 
     this.direct(v, t);
-    const k = 1 - Math.exp(-raw * (stage === "idle" ? 1.2 : 3));
-    this.camera.position.lerp(this.camPos, k);
-    this.look.lerp(this.camLook, k);
+    const k = 1 - Math.exp(-raw * (stage === "idle" ? 1.5 : 3.5));
+    if (this.transT < 1) {
+      this.transT = Math.min(1, this.transT + raw / this.transDur);
+      const e = this.transT * this.transT * (3 - 2 * this.transT);
+      this.camera.position.lerpVectors(this.camFromPos, this.camPos, e);
+      this.look.lerpVectors(this.camFromLook, this.camLook, e);
+      this.fov = THREE.MathUtils.lerp(this.camFromFov, this.targetFov, e);
+    } else {
+      this.camera.position.lerp(this.camPos, k);
+      this.look.lerp(this.camLook, k);
+      this.fov += (this.targetFov - this.fov) * 0.14;
+    }
+    this.shockPush = this.reducedMotion ? 0 : Math.max(0, this.shockPush - raw * 0.75);
     if (!this.reducedMotion && this.shake > 0) {
       this.shake = Math.max(0, this.shake - raw);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.6;
@@ -1111,24 +1330,28 @@ export class Scene3D {
     this.tilt += this.tiltV * raw;
     this.deck.rotation.x = this.tilt;
 
+    const lobbyDim = this.orbit ? 0.22 : 1;
     this.flash = this.reducedMotion ? 0 : Math.max(0, this.flash - raw * 0.9);
-    this.amb.intensity += ((stage === "vote" ? 0.5 : dark ? 0.18 : 0.65) - this.amb.intensity) * k;
-    this.key.intensity += ((dark ? 0.15 : last ? 0.75 : 1.35) - this.key.intensity) * k;
+    this.amb.intensity += (((stage === "vote" ? 0.5 : dark ? 0.18 : 0.65) * (this.orbit ? 0.58 : 1)) - this.amb.intensity) * k;
+    this.key.intensity += (((dark ? 0.15 : last ? 0.75 : 1.35) * (this.orbit ? 0.68 : 1)) - this.key.intensity) * k;
     const beat = last && !this.reducedMotion ? Math.max(0, 1 - ((v!.wall.elapsed % 1) * 3)) : 0;
     this.alarm.color.set(0xff3030);
     if (this.flash > 0) this.alarm.color.copy(this.flashColor);
     this.alarm.intensity = this.reducedMotion ? 0 : this.flash * 420 + beat * 160 + (stage === "drum" ? (Math.sin(t * 14) > 0 ? 120 : 0) : 0);
-    this.wallMat.color.setScalar(dark ? 0.45 : 1).lerp(this.flashColor, this.flash * 0.5);
-    this.bloom.strength = 0.58 + this.flash * 0.45 + (stage === "reveal" ? 0.2 : 0);
+    this.wallMat.color.setScalar((dark ? 0.45 : 1) * lobbyDim).lerp(this.flashColor, this.flash * 0.5);
+    this.tickerMat.color.setScalar(lobbyDim);
+    this.vaultTagMat.opacity = this.orbit ? 0.1 : 1;
+    const baseBloom = this.quality >= 2 ? 0.58 : this.quality === 1 ? 0.26 : 0;
+    this.bloom.strength = this.orbit ? 0.12 : baseBloom + this.flash * 0.4 + (stage === "reveal" ? 0.18 : 0);
 
-    // Vault rotation & glow (brighter during deal and reveal).
-    const vaultHot = stage === "deal" || stage === "reveal";
+    // Vault rotation & glow (brighter during deal and reveal, dimmed when lobby backdrop).
+    const vaultHot = !this.orbit && (stage === "deal" || stage === "reveal");
     this.vault.rotation.y += raw * (stage === "deal" ? 4.2 : 0.35);
     this.vaultCore.rotation.x += raw * (vaultHot ? 2.6 : 1.3);
     this.vaultRings[0].rotation.z += raw * (vaultHot ? 2.4 : 0.9);
     this.vaultRings[1].rotation.y -= raw * (vaultHot ? 2.8 : 1.1);
-    this.vaultLight.intensity += ((vaultHot ? 28 : 10) - this.vaultLight.intensity) * Math.min(1, raw * 6);
-    this.vaultEdgeMat.color.set(MAGENTA).multiplyScalar(vaultHot ? 1.7 : 1.0);
+    this.vaultLight.intensity += ((this.orbit ? 1.2 : vaultHot ? 28 : 10) - this.vaultLight.intensity) * Math.min(1, raw * 6);
+    this.vaultEdgeMat.color.set(MAGENTA).multiplyScalar(this.orbit ? 0.26 : vaultHot ? 1.7 : 1.0);
 
     // Parallax candle columns & animated gate chevrons.
     if (!this.reducedMotion) {
@@ -1194,36 +1417,87 @@ export class Scene3D {
       });
     }
 
-    // Tiles: a green ramp toward LONG, red toward SHORT; the tile a robot stands on takes its colour.
+    // Tiles: preserve each seat's lane colour across both halves while grading LONG green vs SHORT crimson.
     const tip = v?.insiderMe && stage === "live" ? v.wall.future.find((s) => s.at - v.wall.elapsed > 0 && s.at - v.wall.elapsed < 6) : undefined;
-    for (let i = 0; i < N; i++) for (let p = -5; p <= 5; p++) {
-      const s = v?.seats[i], on = s && !s.empty && s.pos === p && !dark;
-      if (on) this.col.set(this.colors[i]).multiplyScalar(0.95);
-      else if (p === 0) this.col.setScalar(dark ? 0.03 : 0.12);
-      else this.col.set(p > 0 ? GREEN : RED).multiplyScalar(dark ? 0.018 : 0.08 + Math.abs(p) * 0.03 + this.flash * 0.22 + beat * 0.04);
-      if (tip && i === v!.me && Math.sign(p) === Math.sign(tip.bps) && !on) this.col.lerp(new THREE.Color(MAGENTA), 0.25 + 0.25 * Math.sin(t * 9));
-      this.tiles.setColorAt(i * 11 + p + 5, this.col);
+    const seatBase = new THREE.Color(), dirTint = new THREE.Color();
+    for (let i = 0; i < N; i++) {
+      seatBase.set(this.colors[i]);
+      for (let p = -5; p <= 5; p++) {
+        const s = v?.seats[i], on = s && !s.empty && s.pos === p && !dark;
+        if (on) {
+          this.col.copy(seatBase).multiplyScalar(1.08);
+        } else if (p === 0) {
+          this.col.copy(seatBase).multiplyScalar(dark ? 0.025 : 0.14).lerp(dirTint.set(0x162040), 0.5);
+        } else {
+          dirTint.set(p > 0 ? GREEN : 0xd61e34);
+          this.col.copy(seatBase).lerp(dirTint, p > 0 ? 0.42 : 0.36);
+          const amp = dark ? 0.018 : 0.11 + Math.abs(p) * 0.024 + this.flash * 0.15 + beat * 0.03;
+          this.col.multiplyScalar(amp);
+        }
+        if (tip && i === v!.me && Math.sign(p) === Math.sign(tip.bps) && !on) this.col.lerp(new THREE.Color(MAGENTA), 0.25 + 0.25 * Math.sin(t * 9));
+        this.tiles.setColorAt(i * 11 + p + 5, this.col);
+      }
     }
     this.tiles.instanceColor!.needsUpdate = true;
 
     let chosen = -1;
-    const tagRects: { x: number; y: number; hw: number; h: number }[] = [];
+    const tagEls = this.tags();
+    if (stage === "vote") {
+      const domAcc = tagEls.findIndex((el) => !!el?.querySelector(".tag-mark"));
+      if (domAcc >= 0 && domAcc !== this.accused && this.bots[domAcc]) {
+        this.accused = domAcc;
+        this.play(this.bots[domAcc], "No", true);
+      }
+    }
+    const pendingTags: { el: HTMLElement; px: number; py: number; hw: number; h: number }[] = [];
     this.bots.forEach((b, i) => {
       b.mixer.update(dt);
       const s = v?.seats[i];
       b.down = Math.max(0, b.down - dt);
+      b.slump = Math.max(0, b.slump - dt);
       if (b.down === 0 && b.current === "Death" && stage === "live") { this.play(b, "Idle"); this.express(b, "Sad"); }
       if (v && s && b.body.visible && b.down === 0 && !(stage === "reveal" && i === v.insider)) {
         const to = this.spot(i, v), d = to.sub(b.root.position), len = d.length();
         if (len > 0.04) {
-          const step = Math.min(len, (dark ? 10 : 7.5) * real);
+          if (!b.moving) b.moveDist = len;
+          const runMove = dark || b.moveDist >= TILE * 1.5;
+          const step = Math.min(len, (dark ? 10 : runMove ? 8.5 : 5.8) * real);
           b.root.position.addScaledVector(d, step / len);
           b.yaw = Math.atan2(d.x, d.z);
           b.trail += step;
           if (stage === "live" && b.trail > 0.75) { b.trail = 0; this.print(b.root.position, i); }
-          if (!b.moving) { b.moving = true; this.play(b, "Running"); }
-        } else if (b.moving) { b.moving = false; this.play(b, "Idle"); }
-        if (!b.moving) b.yaw = dark ? 0 : Math.PI;
+          if (!b.moving) { b.moving = true; this.play(b, runMove ? "Running" : "Walking"); }
+          b.lean += ((runMove ? 0.14 : 0.08) - b.lean) * Math.min(1, raw * 12);
+        } else {
+          if (b.moving) {
+            b.moving = false;
+            if (b.revealPending && v?.stage === "reveal") {
+              b.revealPending = false;
+              v.caught ? this.playSeq(b, ["Jump", "ThumbsUp"]) : this.play(b, "No", true);
+            } else {
+              this.play(b, "Idle", false, false, b.nervous ? 1.3 : 1);
+            }
+          } else if (b.revealPending && v?.stage === "reveal") {
+            b.revealPending = false;
+            v.caught ? this.playSeq(b, ["Jump", "ThumbsUp"]) : this.play(b, "No", true);
+          }
+          b.lean += (0 - b.lean) * Math.min(1, raw * 10);
+          let idleYaw = dark ? 0 : Math.PI;
+          if (!dark && t > b.nextGlance) b.nextGlance = t + 3.2 + Math.random() * 4.5;
+          if (!dark && this.lastTrader >= 0 && this.lastTrader !== i && t - this.glanceAt < 1.5 && this.bots[this.lastTrader]) {
+            const oPos = this.bots[this.lastTrader].root.position;
+            const toOther = Math.atan2(oPos.x - b.root.position.x, oPos.z - b.root.position.z);
+            const deltaY = Math.atan2(Math.sin(toOther - Math.PI), Math.cos(toOther - Math.PI));
+            idleYaw = Math.PI + THREE.MathUtils.clamp(deltaY, -0.65, 0.65);
+          }
+          b.yaw = idleYaw;
+        }
+      } else {
+        b.lean += (0 - b.lean) * Math.min(1, raw * 10);
+      }
+      b.body.rotation.x = b.lean;
+      if (b.neck && b.slump > 0 && b.current === "Idle" && !b.moving) {
+        b.neck.rotation.x += 0.42;
       }
       let dy = b.yaw - b.root.rotation.y;
       dy = Math.atan2(Math.sin(dy), Math.cos(dy));
@@ -1235,8 +1509,21 @@ export class Scene3D {
       b.ring.scale.setScalar(1 + Math.sin(t * 3) * 0.05);
 
       const world = b.root.getWorldPosition(new THREE.Vector3());
-      const lit = !b.body.visible ? 0 : stage === "vote" ? (this.hot === i ? 90 : 45) : stage === "drum" ? (Math.floor(t * 9) % N === i ? 90 : 3) : stage === "reveal" ? (i === v!.insider ? 110 : 0) : 0;
+      const spotFocus = stage === "vote" && (this.hot === i || (this.hot < 0 && this.accused === i));
+      const lit = !b.body.visible ? 0 : stage === "vote" ? (spotFocus ? 95 : 45) : stage === "drum" ? (Math.floor(t * 9) % N === i ? 90 : 3) : stage === "reveal" ? (i === v!.insider ? 110 : 0) : 0;
       if (lit > 80) { chosen = i; this.spotL.position.set(world.x, 11, world.z + 3); this.spotL.target = b.root; this.spotL.color.set(stage === "reveal" ? MAGENTA : 0xffffff); }
+      if (stage === "vote" && !b.moving && b.queue.length === 0 && b.current !== "No") {
+        if (lit > 80 && !b.nervous) {
+          b.nervous = true;
+          this.express(b, "Surprised");
+          if (i % 2 === 0) this.play(b, "Wave", true);
+          else this.play(b, "Idle", false, false, 1.3);
+        } else if (lit <= 80 && b.nervous) {
+          b.nervous = false;
+          this.express(b, null);
+          if (b.current === "Idle") b.actions.Idle.timeScale = 1;
+        }
+      }
 
       // The deal: a beam from the Vault to every robot. Only yours is coloured, and only you see it.
       const bm = b.beam.material as THREE.MeshBasicMaterial, show = stage === "deal" && !s?.empty;
@@ -1248,40 +1535,74 @@ export class Scene3D {
         b.beam.lookAt(head);
         b.beam.scale.set(1, 1, len);
         bm.color.set(i === v!.me ? (v!.insiderMe ? MAGENTA : 0xffffff) : 0x4a5a9a);
+        if (!b.dealDone && bm.opacity >= 0.85) { b.dealDone = true; this.play(b, "Yes", true); }
       }
 
-      const el = this.tags()[i];
+      const el = tagEls[i];
       if (el) {
         const w = this.host.clientWidth || 1, h = this.host.clientHeight || 1;
         const narrow = w < 700;
-        const yOff = narrow && (stage === "live" || stage === "vote") && i % 2 === 1 ? 2.55 : 2.25;
-        const p = world.setY(world.y + yOff).project(this.camera);
+        const yOff = narrow && (stage === "live" || stage === "vote") && i % 2 === 1 ? 2.65 : 2.15;
+        const p = world.clone().setY(world.y + yOff).project(this.camera);
         const vis = p.z < 1 && stage !== "reveal";
         el.style.opacity = vis ? "1" : "0";
         if (vis) {
           const hw = Math.max(18, (el.offsetWidth || 48) / 2);
-          const th = el.offsetHeight || 26;
-          let px = THREE.MathUtils.clamp(((p.x + 1) / 2) * w, hw + 4, w - hw - 4);
+          const th = Math.max(18, el.offsetHeight || 26);
+          const px = THREE.MathUtils.clamp(((p.x + 1) / 2) * w, hw + 4, w - hw - 4);
           let py = ((1 - p.y) / 2) * h;
-          if (narrow && i % 2 === 1) py -= th + 2;
-          for (const r of [...tagRects].sort((a, b) => b.y - a.y)) {
-            if (Math.abs(px - r.x) < hw + r.hw + 4 && py > r.y - r.h - 4 && py - th < r.y + 4) {
-              py = r.y - r.h - 4;
-            }
-          }
-          py = THREE.MathUtils.clamp(py, th + 4, h - 4);
-          tagRects.push({ x: px, y: py, hw, h: th });
-          el.style.transform = `translate(-50%,-100%) translate(${px.toFixed(1)}px,${py.toFixed(1)}px)`;
+          if (narrow && i % 2 === 1) py -= th + 4;
+          pendingTags.push({ el, px, py: THREE.MathUtils.clamp(py, th + 4, h - 4), hw, h: th });
         }
       }
     });
 
-    this.spotL.intensity += ((chosen >= 0 ? 110 : 0) - this.spotL.intensity) * Math.min(1, raw * 8);
-    for (const f of this.prints) {
+    if (pendingTags.length) {
+      const w = this.host.clientWidth || 1, h = this.host.clientHeight || 1;
+      const placedRects: { px: number; py: number; hw: number; h: number }[] = [];
+      const overlaps = (a: { px: number; py: number; hw: number; h: number }, b: { px: number; py: number; hw: number; h: number }) =>
+        Math.abs(a.px - b.px) < a.hw + b.hw + 4 && a.py > b.py - b.h - 4 && a.py - a.h < b.py + 4;
+      for (const item of [...pendingTags].sort((a, b) => b.py - a.py)) {
+        item.py = THREE.MathUtils.clamp(item.py, item.h + 4, h - 4);
+        for (let pass = 0; pass < 8; pass++) {
+          const hit = placedRects.find((r) => overlaps(item, r));
+          if (!hit) break;
+          const upY = hit.py - hit.h - 4;
+          if (upY >= item.h + 4) { item.py = upY; continue; }
+          const downY = hit.py + item.h + 4;
+          if (downY <= h - 4) { item.py = downY; continue; }
+          const shiftR = hit.px + hit.hw + item.hw + 5;
+          const shiftL = hit.px - hit.hw - item.hw - 5;
+          item.px = shiftR <= w - item.hw - 4 ? shiftR : Math.max(item.hw + 4, shiftL);
+        }
+        placedRects.push(item);
+        item.el.style.transform = `translate(-50%,-100%) translate(${item.px.toFixed(1)}px,${item.py.toFixed(1)}px)`;
+      }
+    }
+
+    this.spotL.intensity += ((chosen >= 0 ? 68 : 0) - this.spotL.intensity) * Math.min(1, raw * 8);
+    let printsDirty = false;
+    for (let i = 0; i < this.prints.length; i++) {
+      const f = this.prints[i];
       if (f.life <= 0) continue;
+      printsDirty = true;
       f.life -= dt / 10;
-      (f.m.material as THREE.MeshBasicMaterial).opacity = Math.max(0, f.life) * 0.8;
-      if (f.life <= 0 || stage !== "live") { f.life = 0; f.m.visible = false; }
+      if (f.life <= 0 || stage !== "live") {
+        f.life = 0;
+        this.tmp.position.set(f.x, -10, f.z);
+        this.tmp.scale.setScalar(0);
+      } else {
+        this.tmp.position.set(f.x, 0.02, f.z);
+        this.tmp.rotation.set(0, 0, 0);
+        this.tmp.scale.setScalar(0.55 + f.life * 0.45);
+        this.printMesh.setColorAt(i, this.col.set(this.colors[f.seat]).multiplyScalar(Math.max(0.1, f.life)));
+      }
+      this.tmp.updateMatrix();
+      this.printMesh.setMatrixAt(i, this.tmp.matrix);
+    }
+    if (printsDirty) {
+      this.printMesh.instanceMatrix.needsUpdate = true;
+      if (this.printMesh.instanceColor) this.printMesh.instanceColor.needsUpdate = true;
     }
     this.coins.forEach((c, i) => {
       if (c.life <= 0) return;
@@ -1303,21 +1624,31 @@ export class Scene3D {
 
     this.renderer.info.reset();
     this.composer.render();
-    // Adaptive quality ladder: drop shadows/halve audience at Q1, disable beams/flicker/normal map/bloom at Q0.
+    // Adaptive quality ladder: drop shadows first (Q1), then bloom/effects (Q0) keeping ratio>=1 until <30fps for 2s.
     if (this.warmupFrames < 120) {
       this.warmupFrames++;
     } else if (!document.hidden) {
       this.frames++;
       this.spent += raw;
       if (this.frames === 45) {
-        if (this.spent / 45 > 0.03 && this.quality > 0) {
-          this.badWindows++;
-          if (this.badWindows >= 2) {
-            this.applyQuality(this.quality - 1);
-            this.badWindows = 0;
+        const avgDt = this.spent / 45;
+        if (avgDt > 1 / 30) {
+          if (this.quality > 0) {
+            this.badWindows++;
+            if (this.badWindows >= 2) {
+              this.applyQuality(this.quality - 1);
+              this.badWindows = 0;
+            }
+          } else if (!this.lowDpr) {
+            this.lowFpsSecs += this.spent;
+            if (this.lowFpsSecs >= 2.0) {
+              this.lowDpr = true;
+              this.applyQuality(0);
+            }
           }
         } else {
           this.badWindows = 0;
+          this.lowFpsSecs = 0;
         }
         this.frames = 0;
         this.spent = 0;
@@ -1326,11 +1657,20 @@ export class Scene3D {
   };
 
   private print(at: THREE.Vector3, seat: number) {
-    const f = this.prints[this.printAt = (this.printAt + 1) % this.prints.length];
+    const idx = this.printAt = (this.printAt + 1) % this.prints.length;
+    const f = this.prints[idx];
     f.life = 1;
-    f.m.visible = true;
-    f.m.position.set(at.x + (this.printAt % 2 ? 0.22 : -0.22), 0.02, at.z);
-    (f.m.material as THREE.MeshBasicMaterial).color.set(this.colors[seat]);
+    f.x = at.x + (idx % 2 ? 0.22 : -0.22);
+    f.z = at.z;
+    f.seat = seat;
+    this.tmp.position.set(f.x, 0.02, f.z);
+    this.tmp.rotation.set(0, 0, 0);
+    this.tmp.scale.setScalar(1);
+    this.tmp.updateMatrix();
+    this.printMesh.setMatrixAt(idx, this.tmp.matrix);
+    this.printMesh.setColorAt(idx, this.col.set(this.colors[seat]));
+    this.printMesh.instanceMatrix.needsUpdate = true;
+    if (this.printMesh.instanceColor) this.printMesh.instanceColor.needsUpdate = true;
   }
 
   dispose() {
