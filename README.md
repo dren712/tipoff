@@ -1,192 +1,146 @@
 # Tipoff
 
-A 60-second trading game where one of six players secretly knows the news. If the shock list were readable, everyone would be the insider, so the game only works inside a MagicBlock private rollup.
+A 60-second trading game where one of six players secretly knows the news, and everyone else has to work out who.
 
-- **Play (no wallet):** https://dren712.github.io/tipoff/
-- **Video:** VIDEO_URL_HERE
-- **Proof:** [docs/ATTACKS.md](docs/ATTACKS.md) | [Solana Explorer](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet)
+It only works because the secret stays secret. On a normal blockchain anyone could read the insider and the news schedule straight from the account data. Tipoff runs its rounds inside a MagicBlock private rollup, where nobody can read them, not even the person running the tables.
 
-![Live 3D trading floor on desktop](docs/screens/desktop-live.png)
+- **Play now, no wallet needed:** https://dren712.github.io/tipoff/
+- **Demo video:** VIDEO_URL_HERE
+- **Program on Solana devnet:** [`BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet)
+
+![The live trading floor](docs/screens/desktop-live.png)
 
 <p>
-  <img src="docs/screens/desktop-vote.png" alt="Sealed accusation line-up on desktop" width="40%" />
-  <img src="docs/screens/desktop-reveal.png" alt="Caged insider reveal and round scores on desktop" width="40%" />
-  <img src="docs/screens/phone-live.png" alt="Live trading screen on mobile" width="12%" />
+  <img src="docs/screens/desktop-vote.png" alt="The accusation line-up" width="40%" />
+  <img src="docs/screens/desktop-reveal.png" alt="A caught insider in the cage" width="40%" />
+  <img src="docs/screens/phone-live.png" alt="Trading on a phone" width="12%" />
 </p>
 
-Six traders share one live SOL/USD price (`12x` oracle move clamped at `+/-600` bps) while four news shocks hit it during a 60-second round. MagicBlock VRF secretly picks one seat as the insider and delivers the shock schedule only to that player's private account. Every position move prints publicly on a 3D floor and trade tape, and when trading closes everyone casts a single sealed accusation.
-
-Built for Solana Blitz v10 on MagicBlock's Private Ephemeral Rollup.
-
-| | |
-|---|---|
-| Program (devnet) | [`BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet) |
-| Rollup | MagicBlock devnet TEE validator `MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo` |
-| Oracle | Pyth Lazer SOL/USD feed `ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu` |
-| Stakes | Play chips only. No tokens change hands. |
+Built for Solana Blitz v10.
 
 ## How a round plays
 
-1. **Sit down and deal roles.** Six seats (`Ruby`, `Amber`, `Rusty`, `Jade`, `Azure`, `Violet`) join with a browser guest key and zero gas fees. MagicBlock VRF inside the private rollup chooses one insider and four escalating shocks (`0.8%` to `2.5%` in windows 1–2, `1.2%` to `3.75%` in window 3, `1.6%` to `5.0%` in window 4, up or down in 12-second windows between `8 s` and `56 s`), writing the shock list only to the insider's private seat account.
-2. **Trade on the six-lane deck (60 seconds).** Each robot stands on its own lane between the green `LONG` gate and the red `SHORT` gate, holding up to `+5` lots long or `-5` lots short (`1,000` chips per lot at the opening price). Buying or selling moves the robot along its lane and updates the public trade tape and back-wall price chart.
-3. **React to rumours and news shocks.** Five seconds before each shock, the table publishes a public rumour (`+1` or `-1` bps, matching the true direction two times in three). As each scheduled shock lands, the SOL/USD floor price jumps or drops, marking the back-wall chart and public tape so non-insiders can look for whoever positioned just beforehand.
-4. **Cast a sealed accusation (15 seconds).** When the 60-second clock ends, all six robots walk into a front-row line-up (`Who was the insider?`). Each player can accuse one suspect normally (`0..=5`) or go all-in (`8..=13`), writing their vote to their private seat account; an accusation is final once cast and stays hidden from everyone until settlement.
-5. **Unmask and settle.** After `75` seconds (`60 s` trading + `15 s` voting), `settle` reveals the insider, shocks, votes, and salt: caught insiders drop into a red cage while uncaught insiders celebrate, scores are settled, and `checkpoint` commits the table back to Solana.
+1. **Sit down.** You get a seat at a six-player table straight from the browser. Empty seats are filled by bots, so a round starts within seconds.
+2. **One of you is the insider.** MagicBlock's verifiable randomness picks one player and four news shocks inside the private rollup. Only the insider is told when the shocks land and which way they go.
+3. **Trade for 60 seconds.** Everyone trades the same price, which follows the live SOL/USD price at 12x. Tap Buy or Sell to go up to 5 lots long or short. Each trade confirms in about half a second, with no fees and no wallet pop-ups.
+4. **Watch for the tells.** Five seconds before each shock a public rumour names a direction. It is right two times in three, and only the insider knows which rumours are lies. The last two shocks are the biggest, and every trade appears on the public tape, so the insider has to profit without being obvious.
+5. **Accuse.** When trading ends, you get 15 seconds to cast one sealed vote. The evidence cards show who traded just before each shock. Go all-in if you are sure.
+6. **The reveal.** Votes, the insider and the shocks are revealed together. A caught insider goes in the cage; an insider who escapes celebrates. Scores go to the season board on Solana.
 
-### Scoring
+### Scoring (play chips)
 
-All amounts are chips (`1,000` chips per lot at the opening price, +/-`5` lots max):
-
-- Every seat keeps its trading profit or loss.
-- One accusation is allowed per round and is final once cast: a normal accusation earns `100` if right and costs `50` if wrong; an all-in accusation (`CONVICTION`, vote `suspect + 8`) earns `200` if right and costs `150` if wrong; not voting costs nothing.
-- The insider is **caught** if they receive at least two votes and strictly more votes than any other seat (own votes ignored). A caught insider loses their profit, pays a `100`-chip fine, and their profit is divided equally among the players who accused them.
-- If the insider is not caught, positive profit doubles; if their profit is zero or negative, they pay a `50`-chip blown-tip penalty.
-
-## What you win and keep
-
-Rounds award play chips (`1,000` chips per lot, `+/-5` lots max, plus `100` / `-50` normal or `200` / `-150` all-in accusation stakes). Human players' settled results persist beyond a single round on the shared `Board` PDA (top `50` entries tracking `score`, `rounds`, `caught`, `escapes`, `streak`, and `best`), updated inside the rollup by `post_round` and committed to Solana devnet via `commit_board` ([`5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d`](https://explorer.solana.com/address/5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d?cluster=devnet)).
-
-## Why each MagicBlock piece is needed
-
-Tipoff cannot run on plain Solana because both hidden game state and sub-second trading are required in the same loop. Seated players confirm trades and votes inside the TEE using a browser guest keypair in about 0.5 s per move (median 520 ms in a scripted run), with zero fees and no wallet popups.
-
-| Mechanic (`rules.rs`) | MagicBlock piece | Why it cannot run on plain L1 |
+| | Right | Wrong |
 |---|---|---|
-| Hidden insider and shocks (`draw_round`) | Private Ephemeral Rollup (`Secret` empty member list + `SeatPrivate` access control) | Public L1 account bytes would let anyone read the shock list and act as insider |
-| Rumours (`RUMOUR_LEAD = 5 s`, 2/3 match rate) | Rollup `refresh` reading `Secret` while writing only `+1`/`-1` bps claim onto public `Table` | True shock direction stays hidden on the TEE until `at` lands |
-| Sealed and all-in votes (`0..=5`, `CONVICTION = 8` for `8..=13`) | Private `SeatPrivate` accounts + permissionless `settle` | Votes stay hidden per seat until trading and voting close; second votes revert (`AlreadyVoted`) |
-| The draw (`draw_round`) | MagicBlock VRF inside the rollup (`start_round` / `on_random`) + `revealed_salt` on `settle` | Operator cannot choose the insider, and anyone can verify `draw_round` from `revealed_salt` |
-| The price (`LEVERAGE = 12`x, `+/-600` bps clamp) | Live Pyth Lazer SOL/USD feed read inside the rollup (`tick` & `trade`) + zero-fee guest keys | Live market updates and ~0.5 s per move (`520 ms` scripted median) with no wallet popups |
-| The board and ledger (`post_board_round` / `Board` / `Ledger`) | Rollup commit (`commit_board`, `checkpoint` + `record_round` Magic Action) | Moves and scores run fast inside the TEE, then commit permanently to Solana |
+| Normal accusation | +100 | -50 |
+| All-in accusation | +200 | -150 |
 
-Also backing every move:
+- Everyone keeps their trading profit or loss.
+- The insider is **caught** with at least two votes and more votes than anyone else. They lose their profit, which is shared among their accusers, and pay a 100-chip fine.
+- An insider who **escapes** doubles their profit. If they made nothing, they pay a 50-chip penalty, so sitting still is not a safe way to hide.
+- Human players' results (score, rounds, catches, escapes, streak, best) are kept on the [season board](https://explorer.solana.com/address/5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d?cluster=devnet) on Solana.
 
-- **Hidden state permissions:** `Secret` holds salt, insider index, and four shocks under an empty member list on validator `MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo`, while `SeatPrivate` restricts reads strictly to that seat's wallet and session key.
-- **VRF mixing:** `on_random` checks `VRF_CALLBACK_IDENTITY` and the active request nonce before hashing the VRF output with the prior salt and player `sit` entropy.
-- **Solana base-layer commit:** `checkpoint` commits `Table` to Solana devnet and dispatches a `record_round` Magic Action into `Ledger` (`Dx1D48i2W3UTZpnJF1SxocVybbBDT73RjTVHycLvgcAu`); `commit_board` commits `Board` after rounds with human entries.
+## Why it needs MagicBlock
+
+| The game needs | MagicBlock gives | On plain Solana |
+|---|---|---|
+| A hidden insider and hidden news | A private rollup running in a secure enclave (TEE). The secret account has nobody on its read list, and each seat's private account can be read only by that seat's own keys | Every account is public, so anyone could read the news and trade on it |
+| Sealed votes | Votes are written to each voter's private seat account and only revealed at settlement | Votes would be visible, so players could copy or counter them |
+| A fair draw | MagicBlock VRF inside the rollup, mixed with randomness from every seated player. The salt is published at the end so anyone can recheck the draw | The operator could pick the insider |
+| Fast trading on a live price | Free transactions in about 0.5 s (median 520 ms in a scripted run), reading the SOL/USD oracle inside the rollup | Every trade would cost a fee and a wallet confirmation |
+| A permanent record | Each settled table, round record and the season board are committed back to Solana | — |
 
 ## Proof
 
-- **11/11 live devnet attacks rejected:** [`npm run attack`](docs/ATTACKS.md) (`scripts/attack.ts`) creates a throwaway unfunded keypair, sits on live devnet table `7103`, and verifies that all 11 cheat attempts fail at the rollup permissions or program checks (`read_sealed`, `trade_unowned_seat`, `trade_position_limit`, `vote_self`, `vote_twice` with `AlreadyVoted` / error `6011`, `settle_early`, `settle_twice`, `fake_vrf_callback`, `start_round_live`, `tick_fake_price_feed`, `checkpoint_unsettled_stranger`). See [`docs/ATTACKS.md`](docs/ATTACKS.md) for the full run and defense mapping.
-- **51/51 Rust unit, distribution, and property tests passing:** `cargo test -p tipoff` runs 42 unit tests (`rules.rs`, `oracle.rs`, `lib.rs`) and 9 integration/property tests in `programs/tipoff/tests/invariants.rs` (0 ignored), and `anchor build --ignore-keys` builds the program and IDL. Writing the suite caught two edge-case panics that were fixed and covered by regression tests in [`docs/TESTS.md`](docs/TESTS.md):
-  1. `rules::apply_trade` panicked on `pos.abs()` when `pos + delta == i8::MIN` (`-128`); fixed with a range check returning `TipoffError::PositionLimit` (`rules::tests::apply_trade_i8_min_is_position_limit`).
-  2. `oracle::read_price` panicked when `now - publish_time` overflowed (for example `publish_time == i64::MIN`); fixed using `abs_diff` returning `TipoffError::BadPrice` (`oracle::tests::read_price_extreme_timestamp_is_bad_price`).
-- **On-chain devnet record:** Program [`BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet) stores committed `Table` state and the `Ledger` PDA updated by `checkpoint` -> `record_round`.
-- **Verify a round's draw in the app:** When a round settles, `settle` writes `revealed_salt` onto the public `Table` account. Click **`Verify the draw`** in the post-round results strip—or open the shield (**`Try to cheat`**) drawer and run **`Verify the draw`**—to recompute `rules.rs::draw_round` locally in the browser (`redraw()` in `app/src/chain.ts`, SHA-256 of `"tipoff-draw"` + `revealed_salt`) and verify that the insider and four shocks match the settled table. The same drawer runs live cheat checks and links **`Solana record`** to the latest `Ledger` transaction on Solana Explorer:
+- **11 out of 11 cheats rejected on live devnet.** `npm run attack` uses a fresh key with no funds to try reading the secret, reading another seat, trading as someone else, voting twice, voting for yourself, settling early or twice, faking the VRF callback and the price feed, and more. Full run: [docs/ATTACKS.md](docs/ATTACKS.md).
+- **51 Rust tests pass**, including statistical tests of the draw and property tests of the scoring rules. Writing them found and fixed two crash bugs. Details: [docs/TESTS.md](docs/TESTS.md).
+- **Try it in the game.** The *Try to cheat* button (also opened by clicking the rollup chip) lets you try to read the secret, read another seat or trade as someone else during a live round, and shows each attempt failing. After a round, *Verify the draw* recomputes the insider and shocks in your browser from the published salt.
+- **On-chain record:** the [round ledger](https://explorer.solana.com/address/Dx1D48i2W3UTZpnJF1SxocVybbBDT73RjTVHycLvgcAu?cluster=devnet) and [season board](https://explorer.solana.com/address/5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d?cluster=devnet) on Solana Explorer.
 
-| In-app check | What happens |
-|---|---|
-| Read the secret (`Try to cheat`) | Rollup returns nothing; `Secret` access list is empty |
-| Read another seat | Rollup returns nothing; only that seat's keys can read `SeatPrivate` |
-| Read it from Solana | Base layer shows delegation program ownership and frozen pre-game bytes |
-| Trade as someone else | Rejected with `Unauthorized`; signer is not that seat's wallet or session key |
-| Verify the draw | Recomputes insider and shocks from `revealed_salt` in the browser and compares |
-| Solana record | Opens Explorer for the latest `Ledger` checkpoint / `record_round` transaction |
-
-`scripts/round.ts` automates the three-key privacy read checks (outsider, operator, neighbor), and `scripts/leak.ts` checks what rollup transaction history each party can inspect.
-
-## Architecture
+## How it works
 
 ```
-Solana (devnet)                      Private Ephemeral Rollup (TEE)
----------------                      ------------------------------
-init table, secret, 6 seats
-delegate all of them  ───────────►   seal_secret: access list = nobody
-                                     seal_seat:   access list = nobody
-                                     sit:         seat's access list = that player
-                                     start_round: request VRF
-                                     on_random:   salt = hash(salt, randomness, player entropy)
-                                                  insider + 4 shocks derived from salt
-                                                  insider's seat account gets the shocks
-                                     trade / tick: price = oracle price + shocks so far
-                                     vote:        written once to voter's private seat (final)
-                                     settle:      reveal insider, shocks, votes, salt
-ledger: round recorded  ◄─────────   checkpoint:  commit table + Magic Action (record_round)
+Solana devnet                          MagicBlock private rollup (TEE)
+-------------                          -------------------------------
+create table, secret, 6 seats
+delegate them to the rollup  ───────►  lock the secret: nobody can read it
+                                       sit: a seat becomes readable by its player only
+                                       start_round: request VRF
+                                       VRF callback: pick insider + 4 shocks,
+                                                     tell only the insider
+                                       trade / tick: price = SOL/USD x12 + shocks so far
+                                       vote: sealed in the voter's private seat
+                                       settle: reveal insider, shocks, votes, salt
+round ledger + season board  ◄───────  commit back to Solana
 ```
 
-- **Public (`Table`)**: seats, positions, trade tape (`24` slots), current price, open/oracle prices, and after settlement the insider, shocks, votes, and `revealed_salt`.
-- **Private, zero readers (`Secret`)**: current round salt, insider index, and four shock timings. Only the program accesses it inside the TEE.
-- **Private, one reader per seat (`SeatPrivate`)**: seat's round, role (`trader` or `insider`), shocks (populated for the insider only), and vote.
-- **Profiles, ledger, and board (`Player`, `Ledger`, `Board`)**: `Player` stores wallet/session scores across sessions; `Ledger` stays undelegated on Solana and stores the latest committed round number and `Table` SHA-256 digest; `Board` holds the top `50` guest/human career entries (`score`, `rounds`, `caught`, `escapes`, `streak`, `best`), updated inside the rollup (`post_round`) and committed to Solana (`commit_board`) after rounds with human entries.
+The round runner (`scripts/house.ts`) keeps the public tables going: it seats bots, starts and settles rounds, and commits results. It runs on GitHub Actions ([`.github/workflows/house.yml`](.github/workflows/house.yml)). Because it uses the same permissions as everyone else, the operator cannot read the secret or human players' seats either.
 
-## Threat model
+### Threat model
 
 | Threat | Defence |
 |---|---|
-| A player reads the insider or shocks | `Secret` has an empty access list in the TEE; verified by `scripts/round.ts`, `scripts/attack.ts`, and the in-app drawer |
-| The operator reads the insider | Same; the table authority is not on `Secret` or player `SeatPrivate` access lists |
-| A player reads someone else's vote early | Votes live in `SeatPrivate`, readable only by that seat's registered keys until `settle` |
-| Changing a vote or voting twice | `vote` enforces one vote per seat per round (`AlreadyVoted`, error `6011`), locking cards in the UI and rejecting second votes on-chain |
-| Reading rollup logs to recover VRF output | Transactions touching private accounts return no readable data or logs to non-members; only `checkpoint` commits publicly |
-| The operator chooses the insider | `on_random` accepts only `VRF_CALLBACK_IDENTITY` and active nonce, and mixes in every seated player's `sit` entropy |
-| Replayed, duplicate, or late VRF callbacks | `Table` checks `Phase::Pending` and matches `nonce`; `start_round` allows retry only after `20` seconds |
-| Operator freezes price updates | `tick`, `start_round`, and `settle` are permissionless, and every `trade` calls `refresh` |
-| Fake or stale price feed | `oracle::read_price` verifies the Pyth Lazer account key, oracle program owner, `feed_id`, positive price, non-zero slot, and `30`-second freshness limit |
-| Trading or voting for another seat | `trade` and `vote` verify the signer matches that seat's `wallet` or `session` key |
-| Post-round draw tampering | `settle` publishes `revealed_salt`, and `rules.rs::draw_round` is a pure public function recomputable client-side |
-| Idle player stalls a table | Between rounds the table authority can clear a seat via `stand` |
+| A player or the operator reads the insider or shocks | The secret account has an empty read list inside the TEE |
+| A player reads another seat's role or vote | Each seat's private account is readable only by that seat's keys |
+| Voting twice or changing a vote | Rejected by the program (`AlreadyVoted`) |
+| The operator picks the insider | Only the VRF program can deliver randomness, and it is mixed with every player's entropy; the draw can be rechecked from the published salt |
+| Replayed or late randomness | The callback must match the current round's request |
+| The operator freezes the price | Price updates and settlement can be called by anyone, and every trade refreshes the price |
+| A fake or stale price feed | The oracle account, owner, feed id and a 30-second freshness limit are all checked |
+| Trading or voting for someone else | The signer must be that seat's wallet or session key |
 
-## Known limitations
+### Known limitations
 
-- **Devnet only, play chips only.** No real SOL or token escrow is moved; all scores use table chips.
-- **Trust in the TEE.** Privacy depends on MagicBlock's TEE validator and permission program; the browser does not verify a hardware attestation quote before authenticating.
-- **Public timing.** Every trade timestamp hits the public tape and wall chart, which lets bots analyze trade timing faster than human players.
-- **Guest keys in `localStorage`.** Browser guest keys are stored locally (clearing site storage drops the seat). `Player` profile PDAs (`init_player`, `cash_out`) exist in the program, while the web UI uses guest sessions only.
-- **Operator-derived bot keys.** House bot keys in `scripts/house.ts` are derived from the operator key, so the operator can read bot seats, though it cannot read human seats or `Secret`.
-- **Oracle exponent handling.** Because the devnet feed account stores a mismatched exponent value, `oracle.rs` interprets prices as 8 decimals directly from the Pyth Lazer SOL/USD feed layout.
-- **Rollup testing environment.** Pure Rust logic, VRF draw properties, and oracle bounds are covered by 51 tests in `cargo test -p tipoff` ([`docs/TESTS.md`](docs/TESTS.md)), while rollup execution, permissions, and attacks are tested live against devnet via `scripts/round.ts`, `scripts/leak.ts`, and `scripts/attack.ts` ([`docs/ATTACKS.md`](docs/ATTACKS.md)) rather than a local validator.
+- Devnet only, and play chips only: no real money moves.
+- Privacy relies on MagicBlock's TEE validator. The browser does not check a hardware attestation itself.
+- Trade times are public by design, so bots can read the tape faster than people.
+- Guest keys live in the browser's local storage; clearing it loses the seat.
+- The operator derives the bots' keys, so it can read bot seats (never human seats or the secret).
+- Rollup behaviour is tested live against devnet (`scripts/round.ts`, `scripts/leak.ts`, `scripts/attack.ts`) rather than on a local validator.
 
 ## Repository
 
 ```
-programs/tipoff/
-  src/
-    lib.rs       Anchor instructions, TEE permissions, VRF callback, Magic Action
-    state.rs     Table (public), Secret & SeatPrivate (private), Player, Ledger
-    rules.rs     draw_round, pricing, position limits, scoring, unit tests
-    oracle.rs    Pyth Lazer SOL/USD feed validation and unit tests
-  tests/
-    invariants.rs  draw uniformity and proptest invariant suite
-app/             React + Three.js web client (Vite)
-docs/
-  ATTACKS.md     live 11-attack devnet verification log and rule mapping
-  TESTS.md       51-test Rust suite breakdown and fixed edge-case panics
-  SUBMISSION.md  hackathon project descriptions and tech stack
-  VIDEO.md       2:30 demo script and shot list
-  screens/       desktop (1440x900) and phone (390x844) screenshots
+programs/tipoff/src/
+  lib.rs        instructions: tables, seats, rounds, trades, votes, settlement, commits
+  state.rs      accounts: public Table, private Secret and seats, Ledger, Board
+  rules.rs      the game rules: draw, pricing, position limits, scoring
+  oracle.rs     SOL/USD oracle reading and checks
+programs/tipoff/tests/
+  invariants.rs statistical and property tests
+app/src/
+  App.tsx       lobby, season board, table list
+  Table.tsx     a table: trading, voting, reveal, results
+  Scene3D.ts    the 3D trading floor (Three.js)
+  chain.ts      talking to the program and the rollup
 scripts/
-  lib.ts         shared devnet/TEE connections, PDAs, transaction sender
-  round.ts       full devnet round with privacy checks and latency measurements
-  attack.ts      live 11-cheat verification script against devnet table 7103
-  provision.ts   creates and delegates the lobby tables and seals private accounts
-  house.ts       fills tables with bots, starts rounds, ticks, settles, checkpoints
-  guest.ts       unfunded guest player script for one round
-  leak.ts        inspects rollup transaction visibility across caller keys
+  house.ts      round runner: bots, start, settle, commit
+  bots.ts       bot trading and voting decisions (tested in bots.test.ts)
+  attack.ts     the 11 live cheat attempts
+  round.ts      one scripted round with privacy checks and timings
+  leak.ts       checks what rollup transaction data each party can see
+  provision.ts  creates and delegates the public tables
+  payer.ts      funds the house fee payer inside the rollup
+  guest.ts      plays one round with an unfunded key
+docs/           attack log, test breakdown, submission text, video script, screenshots
 ```
 
 ## Run it
 
 ```bash
-# build Solana program & IDL and run Rust tests (51 tests)
+# program and tests
 anchor build --ignore-keys
 cargo test -p tipoff
 
-# install root script dependencies
+# scripts (Node 20)
 npm install
+npm run attack           # 11 cheat attempts on live devnet, no funded key needed
+npx tsx scripts/guest.ts # play one round as an unfunded guest
+npm run test:bots        # 2,000 simulated bot rounds
 
-# run the 11-attack suite against live devnet table 7103 (no funded key needed)
-npm run attack
-
-# play one unfunded guest round on devnet
-npx tsx scripts/guest.ts
-
-# run a full scripted round or host tables on devnet (needs funded key in keys/deployer.json)
-npm run round
-npm run provision
-npm run house
-
-# run the web client locally
+# web client
 cd app && npm install && npm run dev
 ```
 
-Versions: Anchor `1.0.2`, `ephemeral-rollups-sdk` `0.18.0`, `ephemeral-vrf-sdk`, Solana devnet.
+Running your own tables (`npm run provision`, `npm run house`) needs a funded devnet key in `keys/deployer.json` or the `ADMIN_KEY` environment variable.
+
+Built with Anchor 1.0.2, MagicBlock Ephemeral Rollups SDK 0.18.0, MagicBlock VRF, React, Three.js and Vite. Art and sound credits: [app/public/assets/CREDITS.md](app/public/assets/CREDITS.md).
