@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as chainMod from "./chain";
 import {
   FIRST_TABLE, INTERMISSION, MAX_POS, NONE, ROUND_SECS, SEATS, Session, Table, SeatPrivate, VOTE_SECS, ZERO, actions, base, equity, explorer,
   isRumour, voteSeat,
@@ -11,6 +12,7 @@ import { Avatar, SEAT_COLORS, SEAT_NAMES } from "./Avatar";
 import { isMuted, setMuted, sfx } from "./sound";
 import { Scene3D, Stage } from "./Scene3D";
 import "./css/onboarding.css";
+import "./css/deck.css";
 
 const chips = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(0)}`;
 const pct = (bps: number) => `${bps > 0 ? "+" : "−"}${(Math.abs(bps) / 100).toFixed(1)}%`;
@@ -29,7 +31,10 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const [proof, setProof] = useState<Line[]>([]);
   const [side, setSide] = useState<"tape" | "proof" | null>(null);
   const [pops, setPops] = useState<Record<number, Pop>>({});
-  const [flash, setFlash] = useState<{ id: number; bps: number } | null>(null);
+  const [flash, setFlash] = useState<{ id: number; bps: number; rumourTrue?: boolean } | null>(null);
+  const [priceTick, setPriceTick] = useState<"" | "up" | "down">("");
+  const [pressedBtn, setPressedBtn] = useState<"" | "buy" | "sell">("");
+  const [intent, setIntent] = useState<{ inFlight: number; queued: number }>({ inFlight: 0, queued: 0 });
   const [roleCard, setRoleCard] = useState<{ round: string; insider: boolean } | null>(null);
   const [stage, setStage] = useState(2); // reveal: 0 drum roll, 1 unmask, 2 scores
   const [voted, setVoted] = useState<{ round: string; suspect: number } | null>(null);
@@ -38,6 +43,11 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const [coachRound, setCoachRound] = useState("");
   const [muted, setMute] = useState(isMuted());
   const hist = useRef<Hist>({ round: "", points: [], marks: [], seen: 0, shocks: 0, phase: -1 });
+  const rumourSeen = useRef<Map<number, number>>(new Map());
+  const prevPrice = useRef(0);
+  const settledPos = useRef({ round: "", pos: 0, trades: 0 });
+  const tradeRef = useRef({ inFlight: 0, queued: 0, busy: false });
+  const liveRef = useRef({ seatIdx: -1, round: "", tStart: 0, phase: 0 });
   const shownRole = useRef("");
   const voteLock = useRef("");
   const sitAttempt = useRef({ count: 0, triedSeat: -1 });
@@ -61,11 +71,25 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       const next = await fetchTable(session, key).catch(() => null);
       if (!live || !next) return;
       const round = next.round.toString();
-      if (hist.current.round !== round)
+      if (hist.current.round !== round) {
         hist.current = { round, points: [], marks: [], seen: next.phase === 2 ? Math.max(0, next.tapeLen - next.tape.length) : next.tapeLen, shocks: next.phase === 2 ? next.shocksSeen : 0, phase: hist.current.phase };
+        rumourSeen.current.clear();
+        tradeRef.current = { inFlight: 0, queued: 0, busy: false };
+        setIntent({ inFlight: 0, queued: 0 });
+      }
+      const nsIdx = next.seats.findIndex((s) => s.player.equals(me));
+      if (nsIdx >= 0) {
+        const ns = next.seats[nsIdx];
+        if (settledPos.current.round !== round || ns.trades >= settledPos.current.trades) {
+          settledPos.current = { round, pos: ns.pos, trades: ns.trades };
+        }
+      }
       const h = hist.current;
       const first = h.phase === -1;
       if (next.phase === 2) {
+        next.shocks.forEach((s, i) => {
+          if (isRumour(s)) rumourSeen.current.set(i, Math.sign(s.bps));
+        });
         const el = Math.min(ROUND_SECS, Date.now() / 1000 - next.tStart.toNumber());
         if (el >= 0) h.points.push({ t: el, p: next.price.toNumber() });
         const fresh: Record<number, Pop> = {};
@@ -79,10 +103,13 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         if (Object.keys(fresh).length && !first) setPops((o) => ({ ...o, ...fresh }));
         h.seen = next.tapeLen;
         if (next.shocksSeen > h.shocks) {
-          const sh = next.shocks[next.shocksSeen - 1];
+          const idx = next.shocksSeen - 1;
+          const sh = next.shocks[idx];
           if (!isRumour(sh) && Math.abs(sh.bps) > 1) {
             const bps = sh.bps;
-            if (!first) { setFlash({ id: Date.now(), bps }); sfx.news(bps > 0); scene.current?.news(bps); }
+            const rDir = rumourSeen.current.get(idx);
+            const rumourTrue = rDir !== undefined ? rDir === Math.sign(bps) : undefined;
+            if (!first) { setFlash({ id: Date.now(), bps, rumourTrue }); sfx.news(bps > 0); scene.current?.news(bps); }
             h.shocks = next.shocksSeen;
           }
         }
@@ -210,16 +237,97 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     } catch {}
   }, [seat, phase, trading, elapsed, round, coachRound]);
 
+  liveRef.current = { seatIdx: mySeat, round, tStart: t?.tStart.toNumber() ?? 0, phase };
+
+  useEffect(() => {
+    if (!price) { prevPrice.current = 0; setPriceTick(""); return; }
+    if (prevPrice.current > 0 && price !== prevPrice.current) {
+      setPriceTick(price > prevPrice.current ? "up" : "down");
+      const id = setTimeout(() => setPriceTick(""), 700);
+      prevPrice.current = price;
+      return () => clearTimeout(id);
+    }
+    prevPrice.current = price;
+  }, [price]);
+
+  const flushTrade = useCallback(async () => {
+    const tr = tradeRef.current;
+    if (tr.busy) return;
+    const lv = liveRef.current;
+    const liveNow = lv.phase === 2 && Date.now() / 1000 - lv.tStart < ROUND_SECS;
+    if (!liveNow || lv.seatIdx < 0) {
+      tr.inFlight = 0;
+      tr.queued = 0;
+      setIntent({ inFlight: 0, queued: 0 });
+      return;
+    }
+    const basePos = settledPos.current.round === lv.round ? settledPos.current.pos : 0;
+    const tradesBefore = settledPos.current.round === lv.round ? settledPos.current.trades : 0;
+    const clamped = Math.max(-MAX_POS - basePos, Math.min(MAX_POS - basePos, Math.trunc(tr.queued)));
+    tr.queued = 0;
+    if (clamped === 0) {
+      tr.inFlight = 0;
+      setIntent({ inFlight: 0, queued: 0 });
+      return;
+    }
+    tr.busy = true;
+    tr.inFlight = clamped;
+    setIntent({ inFlight: clamped, queued: 0 });
+    try {
+      const r = await actions.trade(session, key, lv.seatIdx, clamped);
+      onLatency(r.ms);
+      setToast(`${clamped > 0 ? `Bought ${clamped}` : `Sold ${-clamped}`} · ${r.ms} ms`);
+      if (settledPos.current.round === lv.round && settledPos.current.trades === tradesBefore) {
+        settledPos.current.pos += clamped;
+        settledPos.current.trades += 1;
+      }
+      tr.inFlight = 0;
+    } catch (e: any) {
+      tr.inFlight = 0;
+      tr.queued = 0;
+      setIntent({ inFlight: 0, queued: 0 });
+      setToast(`Trade failed: ${e?.message ?? e}`);
+      tr.busy = false;
+      return;
+    }
+    tr.busy = false;
+    if (tradeRef.current.queued !== 0) {
+      void flushTrade();
+    } else {
+      setIntent({ inFlight: 0, queued: 0 });
+    }
+  }, [session, key, onLatency]);
+
   const trade = (d: number) => {
-    if (!seat || !trading || busy) return;
-    sfx.mine(d > 0);
-    run(d > 0 ? `Bought ${d}` : `Sold ${-d}`, () => actions.trade(session, key, mySeat, d));
+    const lv = liveRef.current;
+    const liveNow = lv.phase === 2 && Date.now() / 1000 - lv.tStart < ROUND_SECS;
+    if (!seat || !liveNow || lv.seatIdx < 0) return;
+    const tr = tradeRef.current;
+    const basePos = settledPos.current.round === lv.round ? settledPos.current.pos : seat.pos;
+    const curIntent = basePos + tr.inFlight + tr.queued;
+    const nextIntent = Math.max(-MAX_POS, Math.min(MAX_POS, curIntent + d));
+    const add = nextIntent - curIntent;
+    if (add === 0) return;
+    sfx.mine(add > 0);
+    tr.queued += add;
+    setIntent({ inFlight: tr.inFlight, queued: tr.queued });
+    if (!tr.busy) void flushTrade();
   };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!seat) return;
-      if (e.key === "ArrowUp" && seat.pos < MAX_POS) { e.preventDefault(); trade(1); }
-      if (e.key === "ArrowDown" && seat.pos > -MAX_POS) { e.preventDefault(); trade(-1); }
+      if (!seat || !trading) return;
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setPressedBtn("buy");
+        setTimeout(() => setPressedBtn((p) => (p === "buy" ? "" : p)), 90);
+        trade(1);
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setPressedBtn("sell");
+        setTimeout(() => setPressedBtn((p) => (p === "sell" ? "" : p)), 90);
+        trade(-1);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -313,10 +421,19 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const feed = hist.current.marks.slice(-5).reverse();
   const myLast = seat ? seat.last.toNumber() / 1e6 : 0;
   const R = 25, C = 2 * Math.PI * R;
+  const leverage = Number((chainMod as { LEVERAGE?: number }).LEVERAGE ?? 0);
+  const confirmedPos = seat ? (settledPos.current.round === round ? settledPos.current.pos : seat.pos) : 0;
+  const intentPos = Math.max(-MAX_POS, Math.min(MAX_POS, confirmedPos + intent.inFlight + intent.queued));
+  const activeRumourIdx = trading ? t.shocks.findIndex((s) => isRumour(s) && s.at > elapsed) : -1;
+  const activeRumour = activeRumourIdx >= 0 ? t.shocks[activeRumourIdx] : null;
+  const rumourTruth = activeRumour && insider && current?.shocks[activeRumourIdx]
+    ? Math.sign(activeRumour.bps) === Math.sign(current.shocks[activeRumourIdx].bps)
+    : null;
+  const closingBell = trading && elapsed >= 48 && t.shocksSeen < 4;
   const priceBox = price > 0 && (
     <div className="quote">
-      <span className="quote-sym">SOL</span>
-      <b className="num">${usd(price)}</b>
+      <span className="quote-sym">{leverage > 0 ? `LIVE SOL x${leverage}` : "SOL"}</span>
+      <b className={`num price-val ${priceTick}`}>${usd(price)}</b>
       {phase >= 2 && openPrice > 0 && <span className={`delta ${change >= 0 ? "up" : "down"}`}><Icon name={change >= 0 ? "up" : "down"} size={11} />{Math.abs(change).toFixed(2)}%</span>}
     </div>
   );
@@ -347,12 +464,26 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         {mySeat >= 0 && phase === 2 && current && !roleCard && (
           <div className={`rolechip ${insider ? "ins" : ""}`}><Icon name={insider ? "eye" : "bolt"} size={15} /><span>You are {insider ? "the insider" : "a trader"}</span></div>
         )}
-        {insider && trading && nextShock && (
-          <div className="tip" role="status">
-            <span className="tip-tag"><Icon name="eye" size={13} />Tip-off</span>
-            <span className="tip-main">News in <b className="num">{Math.max(0, Math.ceil(nextShock.at - elapsed))}s</b></span>
-            <b className={`tip-move num ${nextShock.bps > 0 ? "up" : "down"}`}><Icon name={nextShock.bps > 0 ? "up" : "down"} size={13} />{pct(nextShock.bps)}</b>
-            {future.length > 1 && <span className="tip-next">then {future.slice(1).map((f) => `${pct(f.bps)} at ${f.at}s`).join(", ")}</span>}
+        {(insider && trading && nextShock || activeRumour || closingBell) && (
+          <div className="stage-banners">
+            {insider && trading && nextShock && (
+              <div className="tip" role="status">
+                <span className="tip-tag"><Icon name="eye" size={13} />Tip-off</span>
+                <span className="tip-main">News in <b className="num">{Math.max(0, Math.ceil(nextShock.at - elapsed))}s</b></span>
+                <b className={`tip-move num ${nextShock.bps > 0 ? "up" : "down"}`}><Icon name={nextShock.bps > 0 ? "up" : "down"} size={13} />{pct(nextShock.bps)}</b>
+                {rumourTruth !== null && <span className={`tip-verdict ${rumourTruth ? "truth" : "lie"}`}>{rumourTruth ? "The rumour is TRUE" : "The rumour is a LIE"}</span>}
+                {future.length > 1 && <span className="tip-next">then {future.slice(1).map((f) => `${pct(f.bps)} at ${f.at}s`).join(", ")}</span>}
+              </div>
+            )}
+            {activeRumour && (
+              <div className={`rumour ${activeRumour.bps > 0 ? "up" : "down"}`} role="status">
+                <span className="rumour-tag">Rumour</span>
+                <b className="rumour-head">{activeRumour.bps > 0 ? "SOL to surge" : "SOL to dump"}</b>
+                <b className="rumour-cd num">{Math.max(0, Math.ceil(activeRumour.at - elapsed))}s</b>
+                <span className="rumour-note">Rumours are right 2 times in 3</span>
+              </div>
+            )}
+            {closingBell && <div className="closing-bell" role="status">Final shock is double size</div>}
           </div>
         )}
         {flash && (
@@ -360,6 +491,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
             <span className="nf-tag">Breaking</span>
             <b className="nf-text">{flash.bps > 0 ? "SOL surges" : "SOL dumps"}</b>
             <b className="nf-move num">{pct(flash.bps)}</b>
+            {flash.rumourTrue !== undefined && <span className={`nf-rumour ${flash.rumourTrue ? "truth" : "lie"}`}>{flash.rumourTrue ? "Rumour was true" : "Rumour was false"}</span>}
           </div>
         )}
 
@@ -405,7 +537,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         </div>
         <div className="bar-mid">
           {left > 0 ? (
-            <div className={`clock ${accusing ? "vote" : ""} ${left < 10 ? "hot" : ""}`} role="timer" aria-label={`${Math.ceil(left)} seconds left`}>
+            <div className={`clock ${accusing ? "vote" : ""} ${left < 10 ? "hot" : ""} ${closingBell ? "closing" : ""}`} role="timer" aria-label={`${Math.ceil(left)} seconds left`}>
               <svg viewBox="0 0 60 60"><circle cx="30" cy="30" r={R} className="track" /><circle cx="30" cy="30" r={R} className="fill" strokeDasharray={C} strokeDashoffset={C * (1 - Math.max(0, Math.min(1, frac)))} /></svg>
               <b className="num">{Math.ceil(left)}</b>
               <span>{accusing ? "Vote" : "Trade"}</span>
@@ -437,17 +569,48 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
           <>
             {showCoach && <div className="coach" role="status">Watch who trades just before the news.</div>}
             <div className="deck">
-            <button className="trade sell" disabled={!trading || seat.pos <= -MAX_POS} onClick={() => trade(-1)}><Icon name="down" size={22} /><span>Sell</span><kbd>↓</kbd></button>
+            <button
+              className={`trade sell ${pressedBtn === "sell" ? "pressed" : ""}`}
+              disabled={!trading || intentPos <= -MAX_POS}
+              onPointerDown={() => setPressedBtn("sell")}
+              onPointerUp={() => setPressedBtn("")}
+              onPointerLeave={() => setPressedBtn("")}
+              onPointerCancel={() => setPressedBtn("")}
+              onClick={() => trade(-1)}
+            ><Icon name="down" size={22} /><span>Sell</span><kbd>↓</kbd></button>
             <div className="mypos">
               <div className="mypos-top">
-                <b className={seat.pos > 0 ? "up" : seat.pos < 0 ? "down" : ""}>{seat.pos > 0 ? `Long ${seat.pos}` : seat.pos < 0 ? `Short ${-seat.pos}` : "Flat"}</b>
+                <b className={intentPos > 0 ? "up" : intentPos < 0 ? "down" : ""}>
+                  {intentPos > 0 ? `Long ${intentPos}` : intentPos < 0 ? `Short ${-intentPos}` : "Flat"}
+                  {intentPos !== confirmedPos && <small className="mypos-pending">pending</small>}
+                </b>
                 <span className={`pnl num ${myEq >= 0 ? "up" : "down"}`}>{chips(myEq)}<small>chips</small></span>
               </div>
-              <div className="lots" aria-hidden="true">{Array.from({ length: MAX_POS * 2 + 1 }, (_, k) => k - MAX_POS).map((v) => (
-                <i key={v} className={v === 0 ? "mid" : (v > 0 && seat.pos >= v) || (v < 0 && seat.pos <= v) ? (v > 0 ? "long" : "shortp") : ""} />))}</div>
+              <div className="lots" aria-hidden="true">{Array.from({ length: MAX_POS * 2 + 1 }, (_, k) => k - MAX_POS).map((v) => {
+                let cls = "";
+                if (v === 0) cls = "mid";
+                else if (v > 0) {
+                  if (confirmedPos >= v && intentPos >= v) cls = "long";
+                  else if (intentPos >= v) cls = "long pending";
+                  else if (confirmedPos >= v) cls = "trim";
+                } else {
+                  if (confirmedPos <= v && intentPos <= v) cls = "shortp";
+                  else if (intentPos <= v) cls = "shortp pending";
+                  else if (confirmedPos <= v) cls = "trim";
+                }
+                return <i key={v} className={cls} />;
+              })}</div>
               <div className="mypos-scale"><span>Short 5</span><span>Long 5</span></div>
             </div>
-            <button className="trade buy" disabled={!trading || seat.pos >= MAX_POS} onClick={() => trade(1)}><Icon name="up" size={22} /><span>Buy</span><kbd>↑</kbd></button>
+            <button
+              className={`trade buy ${pressedBtn === "buy" ? "pressed" : ""}`}
+              disabled={!trading || intentPos >= MAX_POS}
+              onPointerDown={() => setPressedBtn("buy")}
+              onPointerUp={() => setPressedBtn("")}
+              onPointerLeave={() => setPressedBtn("")}
+              onPointerCancel={() => setPressedBtn("")}
+              onClick={() => trade(1)}
+            ><Icon name="up" size={22} /><span>Buy</span><kbd>↑</kbd></button>
           </div>
           </>
         )}
