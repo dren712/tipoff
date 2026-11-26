@@ -204,19 +204,14 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       onLatency(r.ms);
       setToast(`${allIn ? "All-in accused" : "Accused"} ${SEAT_NAMES[i]} · ${r.ms} ms`);
     } catch (e: any) {
-      if (allIn) {
-        try {
-          const r = await actions.vote(session, key, mySeat, i);
-          onLatency(r.ms);
-          setToast("All-in not available, normal vote sent");
-          return;
-        } catch (e2: any) {
-          e = e2;
-        }
+      const errorText = String(e?.message ?? e);
+      if (errorText.includes("AlreadyVoted") || errorText.includes("6011")) {
+        setToast("Vote already recorded");
+      } else {
+        voteLock.current = "";
+        setVoted((v) => (v?.round === round ? null : v));
+        setToast(`Accused ${SEAT_NAMES[i]} failed: ${errorText}`);
       }
-      voteLock.current = "";
-      setVoted((v) => (v?.round === round ? null : v));
-      setToast(`Accused ${SEAT_NAMES[i]} failed: ${e?.message ?? e}`);
     } finally {
       setBusy(false);
     }
