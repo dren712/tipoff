@@ -212,7 +212,7 @@ h1, h2, p { margin: 0; }
 .tray { position: absolute; z-index: 10; left: 0; right: 0; bottom: 0; display: grid; justify-items: center; padding: 0 calc(16px + var(--safe-r)) calc(16px + var(--safe-b)) calc(16px + var(--safe-l)); pointer-events: none; }
 .tray > * { pointer-events: auto; }
 .deck { display: grid; grid-template-columns: minmax(150px, 220px) minmax(260px, 360px) minmax(150px, 220px); gap: 14px; align-items: stretch; }
-.trade { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 84px; border-radius: 18px; font: 400 30px/1 var(--sign); color: #fff; transition: transform .07s, box-shadow .07s, filter .15s; }
+.trade { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 84px; border-radius: 18px; font: 400 30px/1 var(--sign); color: #fff; transition: transform 35ms ease-out, box-shadow 35ms ease-out, filter 35ms ease-out; }
 .trade kbd { font: 700 14px/1 var(--hud); padding: 4px 7px; border-radius: 6px; background: rgba(0, 0, 0, .25); }
 .trade.buy { background: linear-gradient(180deg, #37f0a0, #12c877); color: #04200f; box-shadow: 0 7px 0 var(--up-d), 0 16px 34px rgba(31, 229, 142, .28); }
 .trade.sell { background: linear-gradient(180deg, #ff6b83, #f03556); box-shadow: 0 7px 0 var(--down-d), 0 16px 34px rgba(255, 74, 102, .28); }
