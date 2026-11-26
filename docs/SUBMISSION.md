@@ -18,7 +18,7 @@ Tipoff is a multiplayer trading and deduction game built for Solana Blitz v10 us
 
 At round start, MagicBlock VRF inside the rollup selects one insider, shocks, and rumours, chaining randomness with entropy from every seated player. Only the insider's private seat account receives the shock list; `Secret` allows zero readers, including the operator. Players tap Buy or Sell up to 5 lots long or short (`1,000` chips per lot at open). Orders confirm in about 0.5 s per move (median 520 ms in a scripted run) with zero fees and no wallet popups via a browser guest key, moving each 3D robot along its lane.
 
-Because trades hit the public tape and back wall, the insider must profit without tipping off the floor. At 60 seconds, players get 15 seconds to cast one sealed vote (normal `+100`/`-50` or all-in `CONVICTION` `+200`/`-150`). If at least two accusers give the insider a strict plurality, the insider loses profits and pays a `100`-chip fine split among accusers; otherwise profits double (or zero/negative profit pays a `50`-chip blown-tip penalty). Settlement reveals the salt for local verification and commits `Table`, `Ledger`, and the `50`-entry `Board` back to Solana.
+Because trades hit the public tape and back wall, the insider must profit without tipping off the floor. At 60 seconds, players get 15 seconds to cast one sealed vote (normal `+100`/`-50` or all-in `CONVICTION` `+200`/`-150`). If at least two accusers give the insider a strict plurality, the insider pays a `100`-chip fine and their profit is split among the accusers; otherwise profits double (or zero/negative profit pays a `50`-chip blown-tip penalty). Settlement reveals the salt for local verification and commits `Table`, `Ledger`, and the `50`-entry `Board` back to Solana.
 
 ## How It Uses MagicBlock
 
@@ -47,4 +47,4 @@ Because trades hit the public tape and back wall, the insider must profit withou
 - **On-chain addresses (devnet)**:
   - Program: `BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`
   - Ledger PDA (`ledger` seed): [`Dx1D48i2W3UTZpnJF1SxocVybbBDT73RjTVHycLvgcAu`](https://explorer.solana.com/address/Dx1D48i2W3UTZpnJF1SxocVybbBDT73RjTVHycLvgcAu?cluster=devnet)
-  - Board PDA (`board` seed): `BOARD_ADDRESS_HERE`
+  - Board PDA (`board` seed): [`5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d`](https://explorer.solana.com/address/5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d?cluster=devnet)

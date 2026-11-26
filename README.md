@@ -44,7 +44,7 @@ All amounts are chips (`1,000` chips per lot at the opening price, +/-`5` lots m
 
 ## What you win and keep
 
-Rounds award play chips (`1,000` chips per lot, `+/-5` lots max, plus `100` / `-50` normal or `200` / `-150` all-in accusation stakes). Human players' settled results persist beyond a single round on the shared `Board` PDA (top `50` entries tracking `score`, `rounds`, `caught`, `escapes`, `streak`, and `best`), updated inside the rollup by `post_round` and committed to Solana devnet via `commit_board` (`BOARD_ADDRESS_HERE`).
+Rounds award play chips (`1,000` chips per lot, `+/-5` lots max, plus `100` / `-50` normal or `200` / `-150` all-in accusation stakes). Human players' settled results persist beyond a single round on the shared `Board` PDA (top `50` entries tracking `score`, `rounds`, `caught`, `escapes`, `streak`, and `best`), updated inside the rollup by `post_round` and committed to Solana devnet via `commit_board` ([`5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d`](https://explorer.solana.com/address/5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d?cluster=devnet)).
 
 ## Why each MagicBlock piece is needed
 

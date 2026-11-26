@@ -7,7 +7,7 @@
 | 0:00 - 0:06 | Lobby or floor opening over the six seated robots (`Ruby` to `Violet`) | "One of these six knows the news early." | One of these six knows the news early |
 | 0:06 - 0:20 | Rumour slot flashes 5 s before the shock alongside the Insider `Tip-off` countdown banner; shock lands and trades move on tape | Show the public rumour, then the real shock landing while the insider front-runs cleanly with ~0.5 s confirmation (`520 ms` scripted median) | Rumour -> shock + Insider tip-off banner |
 | 0:20 - 0:32 | At 60 s, the vote lineup appears with the per-shock evidence board; player casts an accusation (normal or all-in) | Inspect the evidence strip against each shock window and lock a sealed vote into `SeatPrivate` | Evidence board + sealed / all-in vote |
-| 0:32 - 0:42 | Drum roll -> reveal spots the insider, drops the red cage (Punch x2 -> Sitting), and shows score deltas + `Board` update | Caught insider pays the 100-chip fine and splits profits across winning accusers | Caged reveal + round score breakdown |
+| 0:32 - 0:42 | Drum roll -> reveal spots the insider, drops the red cage, and shows score deltas + `Board` update | Caught insider pays the 100-chip fine and splits profits across winning accusers | Caged reveal + round score breakdown |
 | 0:42 - 0:50 | Open the `Try to cheat` drawer clicking `Read the secret` / `Read another seat` (refused), then switch to Explorer showing the committed `Board` / `Ledger` | Prove the rollup hides private accounts while base-layer settlement commits to Solana | Cheat drawer refuses reads + Explorer proof |
 | 0:50 - 0:55 | End card with play URL, repo URL, and devnet program address | Close on playable guest link with zero wallet or fee needed | Play (no wallet): https://dren712.github.io/tipoff/ |
 
