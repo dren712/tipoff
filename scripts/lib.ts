@@ -16,7 +16,7 @@ export const SEATS = 6;
 export const ROUND_SECS = 60;
 export const VOTE_SECS = 15;
 export const CONVICTION = 8;
-export const INTERMISSION = 8;
+export const INTERMISSION = 15;
 export const LOBBY_WAIT = 2;
 /// Public lobby tables are ids FIRST_TABLE .. FIRST_TABLE + n.
 export const FIRST_TABLE = 7100;
