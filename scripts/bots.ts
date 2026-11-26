@@ -273,7 +273,7 @@ export function decideVote(
   ranked.sort((a, b) => b.score - a.score);
   const top = ranked[0];
   const second = ranked[1]?.score ?? 0;
-  if (allowAllIn && top.score - second > 2) {
+  if (allowAllIn && top.score - second > 5) {
     return top.seat + CONVICTION;
   }
   return top.seat;
