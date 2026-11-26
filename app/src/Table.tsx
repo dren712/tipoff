@@ -10,17 +10,121 @@ import type { Point, Mark } from "./Chart";
 import { Evidence } from "./Evidence";
 import { Icon, Logo } from "./Icon";
 import { Avatar, SEAT_COLORS, SEAT_NAMES } from "./Avatar";
+import { Career, CareerRound } from "./Career";
 import { isMuted, setMuted, sfx } from "./sound";
 import { Scene3D, Stage } from "./Scene3D";
 import "./css/onboarding.css";
 import "./css/deck.css";
 
-const chips = (n: number) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(0)}`;
+const chips = (n: number) => {
+  const v = Math.round(n);
+  return v === 0 ? "0" : `${v > 0 ? "+" : "−"}${Math.abs(v)}`;
+};
 const pct = (bps: number) => `${bps > 0 ? "+" : "−"}${(Math.abs(bps) / 100).toFixed(1)}%`;
 const usd = (p: number) => (p / 1e8).toFixed(2);
 type Line = { ok: boolean; text: string; href?: string };
 type Pop = { id: number; delta: number };
 type Hist = { round: string; points: Point[]; marks: Mark[]; seen: number; shocks: number; phase: number; rumours: Record<number, number> };
+type SnapSeat = {
+  seat: number;
+  name: string;
+  played: boolean;
+  cashRaw: number;
+  lastRaw: number;
+  cash: number;
+  last: number;
+  vote: number;
+  suspect: number;
+  allIn: boolean;
+  votesGot: number;
+};
+type RevealSnap = {
+  round: string;
+  tableId: number;
+  insider: number;
+  caught: boolean;
+  mySeat: number;
+  accusers: number;
+  seats: SnapSeat[];
+};
+type BreakdownItem = { text: string; tone?: "up" | "down" };
+
+const snapKey = (index: number) => `tipoff-snap-${FIRST_TABLE + index}`;
+
+function buildSnap(t: Table, round: string, tableId: number, me: Session["kp"]["publicKey"]): RevealSnap {
+  const conv = Number((chainMod as { CONVICTION?: number }).CONVICTION ?? 8);
+  const mySeat = t.seats.findIndex((s) => s.player.equals(me));
+  const seats = t.seats.map((s, i) => {
+    const played = true;
+    const cashRaw = s.cash.toNumber();
+    const lastRaw = s.last.toNumber();
+    const vote = t.votes[i] ?? NONE;
+    const suspect = voteSeat(vote);
+    const allIn = vote >= conv && vote < conv + SEATS;
+    return {
+      seat: i,
+      name: SEAT_NAMES[i],
+      played,
+      cashRaw,
+      lastRaw,
+      cash: cashRaw / 1e6,
+      last: lastRaw / 1e6,
+      vote,
+      suspect,
+      allIn,
+      votesGot: 0,
+    };
+  });
+  const accusers = seats.filter((o) => o.played && o.seat !== t.insider && o.suspect === t.insider).length;
+  for (const target of seats) {
+    target.votesGot = seats.filter((o) => o.played && o.seat !== t.insider && o.suspect === target.seat).length;
+  }
+  return { round, tableId, insider: t.insider, caught: t.caught, mySeat, accusers, seats };
+}
+
+function verdictLine(s: RevealSnap): string {
+  const ins = s.seats[s.insider];
+  const acc = s.accusers;
+  if (s.caught) return `Caught by ${acc} accuser${acc === 1 ? "" : "s"}. Fined 100, profit shared out.`;
+  const head = ins && ins.cashRaw > 0 ? "Got away with it. Profit doubled." : "Got away, but blew the tip.";
+  const tail = acc === 0 ? "Nobody suspected them." : `${acc} accused them, not enough to convict.`;
+  return `${head} ${tail}`;
+}
+
+function breakdownOf(s: RevealSnap): BreakdownItem[] {
+  if (s.mySeat < 0) return [];
+  const mine = s.seats[s.mySeat];
+  if (!mine || !mine.played) return [];
+  const trading = Math.round(mine.cash);
+  const total = Math.round(mine.last);
+  const tTone = trading > 0 ? "up" : trading < 0 ? "down" : undefined;
+  const out: BreakdownItem[] = [{ text: `Trading ${chips(trading)}`, tone: tTone }];
+  if (mine.seat === s.insider) {
+    const delta = total - trading;
+    if (!s.caught) {
+      out.push({
+        text: mine.cashRaw > 0 ? `Profit doubled ${chips(delta)}` : `Blew the tip ${chips(delta)}`,
+        tone: delta > 0 ? "up" : delta < 0 ? "down" : undefined,
+      });
+    } else {
+      if (trading > 0) out.push({ text: `Profit forfeited ${chips(-trading)}`, tone: "down" });
+      const fine = total - (trading > 0 ? 0 : trading);
+      if (fine !== 0) out.push({ text: `Fined ${chips(fine)}`, tone: "down" });
+    }
+    return out;
+  }
+  if (mine.suspect === NONE) {
+    out.push({ text: "Accusation: No vote" });
+    return out;
+  }
+  const right = mine.suspect === s.insider;
+  const accVal = right ? (mine.allIn ? 200 : 100) : (mine.allIn ? -150 : -50);
+  const accName = mine.allIn ? (right ? "All in right" : "All in wrong") : (right ? "Right" : "Wrong");
+  out.push({ text: `Accusation: ${accName} ${chips(accVal)}`, tone: right ? "up" : "down" });
+  const share = total - trading - accVal;
+  if (right && s.caught && share > 0) out.push({ text: `Profit split ${chips(share)}`, tone: "up" });
+  return out;
+}
 
 export function TableView({ session, index, autoSit = false, median, onLeave, onLatency }: { session: Session; index: number; autoSit?: boolean; median: number | null; onLeave: () => void; onLatency: (ms: number) => void }) {
   const key = useMemo(() => tablePda(FIRST_TABLE + index), [index]);
@@ -42,6 +146,8 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const [allIn, setAllIn] = useState(false);
   const [wantSit, setWantSit] = useState(autoSit);
   const [witnessedRound, setWitnessedRound] = useState("");
+  const [snap, setSnap] = useState<RevealSnap | null>(null);
+  const snapRef = useRef<RevealSnap | null>(null);
   const [coachRound, setCoachRound] = useState("");
   const [muted, setMute] = useState(isMuted());
   const hist = useRef<Hist>({ round: "", points: [], marks: [], seen: 0, shocks: 0, phase: -1, rumours: {} });
@@ -73,6 +179,8 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
 
   useEffect(() => {
     let live = true;
+    snapRef.current = null;
+    setSnap(null);
     const load = async () => {
       const next = await fetchTable(session, key).catch(() => null);
       if (!live || !next) return;
@@ -125,7 +233,31 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         }
         if (h.phase === 1) sfx.bell();
       }
+      if (next.phase !== 3) {
+        if (snapRef.current) {
+          snapRef.current = null;
+          setSnap(null);
+          try { sessionStorage.removeItem(snapKey(index)); } catch {}
+        }
+      } else if (first) {
+        try {
+          const raw = sessionStorage.getItem(snapKey(index));
+          if (raw) {
+            const saved = JSON.parse(raw) as RevealSnap;
+            if (saved.round === round && saved.seats?.length === SEATS && saved.seats.every((x) => x.played)) {
+              snapRef.current = saved;
+              setSnap(saved);
+              setWitnessedRound(round);
+              setStage(2);
+            }
+          }
+        } catch {}
+      }
       if (next.phase === 3 && h.phase === 2) {
+        const s = buildSnap(next, round, FIRST_TABLE + index, me);
+        snapRef.current = s;
+        setSnap(s);
+        try { sessionStorage.setItem(snapKey(index), JSON.stringify(s)); } catch {}
         setWitnessedRound(round);
         setStage(0);
         sfx.drum();
@@ -365,7 +497,8 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   // Push the round into the 3D floor.
   useEffect(() => {
     if (!t || !scene.current) return;
-    const seatedNow = t.seats.some((s) => !s.player.equals(ZERO)), done = phase === 3 && seatedNow && witnessedRound === round;
+    const seatedNow = t.seats.some((s) => !s.player.equals(ZERO)), hasSnap = snapRef.current?.round === round;
+    const done = phase === 3 && (seatedNow || hasSnap) && witnessedRound === round;
     const st: Stage = phase === 1 ? "deal" : trading ? "live" : accusing ? "vote" : done ? (stage === 0 ? "drum" : "reveal") : "idle";
     scene.current.set({
       stage: st, me: mySeat, insiderMe: !!insider, insider: t.insider, caught: t.caught, canVote: accusing && mySeat >= 0 && canVote && !busy && !locked,
@@ -387,15 +520,16 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   );
 
   const seated = t.seats.some((s) => !s.player.equals(ZERO));
+  const curSnap = snap && snap.round === round ? snap : null;
   const witnessed = witnessedRound === round;
-  const settled = phase === 3 && seated && witnessed;
+  const settled = phase === 3 && (seated || !!curSnap) && witnessed;
   const canSit = mySeat < 0 && (phase === 0 || phase === 3);
   const openIn = phase === 2 ? Math.max(1, Math.ceil(t.tStart.toNumber() + ROUND_SECS + VOTE_SECS - now)) : 0;
   const waitState = phase === 1 ? "Dealing secret roles" : mySeat >= 0 ? "Bots are joining" : wantSit && phase === 2 ? `Seat opens in ${openIn}s` : "Finding you a seat";
   const nextIn = settled ? Math.max(0, Math.ceil(t.settledAt.toNumber() + INTERMISSION - now)) : 0;
   const future = insider ? current!.shocks.filter((s) => s.at > elapsed) : [];
   const nextShock = future[0];
-  const votesFor = (i: number) => (settled && stage >= 1 ? t.votes.filter((v, k) => voteSeat(v) === i && k !== t.insider).length : 0);
+  const votesFor = (i: number) => (settled && stage >= 1 ? (curSnap ? curSnap.seats[i]?.votesGot ?? 0 : t.votes.filter((v, k) => voteSeat(v) === i && k !== t.insider).length) : 0);
 
   const add = (l: Line) => setProof((p) => [l, ...p].slice(0, 12));
   const cheat = {
@@ -446,9 +580,22 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const left = trading ? ROUND_SECS - elapsed : accusing && canVote ? ROUND_SECS + VOTE_SECS - elapsed : 0;
   const frac = trading ? left / ROUND_SECS : accusing && canVote ? left / VOTE_SECS : 0;
   const firstOpen = t.seats.findIndex((s) => s.player.equals(ZERO));
-  const ranked = t.seats.map((_, i) => i).filter((i) => !t.seats[i].player.equals(ZERO)).sort((a, b) => t.seats[b].last.cmp(t.seats[a].last));
+  const ranked = curSnap
+    ? curSnap.seats.filter((s) => s.played).sort((a, b) => b.last - a.last)
+    : [];
   const feed = hist.current.marks.slice(-5).reverse();
-  const myLast = seat ? seat.last.toNumber() / 1e6 : 0;
+  const mySnap = curSnap && curSnap.mySeat >= 0 ? curSnap.seats[curSnap.mySeat] : null;
+  const myLast = mySnap ? mySnap.last : seat ? seat.last.toNumber() / 1e6 : 0;
+  const breakdown = curSnap ? breakdownOf(curSnap) : [];
+  const careerRound: CareerRound | null = curSnap ? {
+    tableId: curSnap.tableId,
+    round: curSnap.round,
+    played: curSnap.mySeat >= 0,
+    lastRaw: mySnap?.lastRaw ?? 0,
+    caughtRight: !!mySnap && mySnap.seat !== curSnap.insider && mySnap.suspect === curSnap.insider,
+    wrongVote: !!mySnap && mySnap.seat !== curSnap.insider && mySnap.suspect !== NONE && mySnap.suspect !== curSnap.insider,
+    escapedInsider: !!mySnap && mySnap.seat === curSnap.insider && !curSnap.caught,
+  } : null;
   const R = 25, C = 2 * Math.PI * R;
   const leverage = Number((chainMod as { LEVERAGE?: number }).LEVERAGE ?? 0);
   const confirmedPos = seat ? (settledPos.current.round === round ? settledPos.current.pos : seat.pos) : 0;
@@ -548,12 +695,12 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         )}
         {ui === "vote" && <div className="headline"><h2>Who was the insider?</h2><p>{mySeat >= 0 ? (canVote ? (myVote !== null ? `You accused ${SEAT_NAMES[myVote]}. Votes stay sealed until the reveal.` : "Pick your suspect. Votes stay sealed until the reveal.") : "Votes are in. Opening the envelope.") : "The floor is voting in secret."}</p></div>}
         {ui === "drum" && <div className="headline"><h2 className="pulse">The insider was</h2></div>}
-        {ui === "reveal" && (
-          <div className={`headline verdict ${t.caught ? "caught" : "escaped"}`} style={{ ["--c" as any]: SEAT_COLORS[t.insider] }}>
+        {ui === "reveal" && curSnap && (
+          <div className={`headline verdict ${curSnap.caught ? "caught" : "escaped"}`} style={{ ["--c" as any]: SEAT_COLORS[curSnap.insider] }}>
             <span className="kicker">The insider was</span>
-            <h2 className="culprit">{SEAT_NAMES[t.insider]}{t.insider === mySeat && <em>that's you</em>}</h2>
-            <div className="stamp">{t.caught ? "Caught" : "Got away"}</div>
-            {stage === 2 && <p>{t.caught ? "Fined 100 chips. Their profit is split between the accusers." : "Nobody pinned it on them. Their profit doubles."}</p>}
+            <h2 className="culprit">{SEAT_NAMES[curSnap.insider]}{curSnap.insider === curSnap.mySeat && <em>that's you</em>}</h2>
+            <div className="stamp">{curSnap.caught ? "Caught" : "Got away"}</div>
+            {stage === 2 && <p>{verdictLine(curSnap)}</p>}
           </div>
         )}
       </div>
@@ -676,28 +823,41 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
           />
         )}
 
-        {ui === "reveal" && stage === 2 && (
+        {ui === "reveal" && stage === 2 && curSnap && (
           <div className="results">
             <div className="results-head">
-              {seat ? <span className={`you num ${myLast >= 0 ? "up" : "down"}`}>You {chips(myLast)} chips</span> : <span className="you">Round {round} results</span>}
-              <span className="grow" />
-              <button className="btn small" onClick={() => { setSide("proof"); cheat.verify(); }}><Icon name="shield" size={15} />Verify the draw</button>
-              {nextIn > 0 && <span className="next num">Next round in {nextIn}s</span>}
+              <div className="results-summary">
+                {mySnap ? (
+                  <>
+                    <span className={`you num ${Math.round(myLast) > 0 ? "up" : Math.round(myLast) < 0 ? "down" : ""}`}>You {chips(myLast)} chips</span>
+                    <div className="breakdown" aria-label="Score breakdown">
+                      {breakdown.map((b, idx) => (
+                        <span key={idx} className={`bd-item num ${b.tone ?? ""}`}>{b.text}</span>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <span className="you">Round {round} results</span>
+                )}
+              </div>
+              <div className="results-actions">
+                <button className="btn small" onClick={() => { setSide("proof"); cheat.verify(); }}><Icon name="shield" size={15} />Verify the draw</button>
+                {nextIn > 0 && <span className="next num">Next round in {nextIn}s</span>}
+              </div>
+              {careerRound && <Career session={session} round={careerRound} chips={chips} />}
             </div>
             <div className="suspects">
-              {ranked.map((i, rank) => {
-                const s = t.seats[i], last = s.last.toNumber() / 1e6, v = voteSeat(t.votes[i]), got = votesFor(i);
-                return (
-                  <div key={i} className={`suspect score ${i === t.insider ? "insider" : ""} ${i === mySeat ? "self" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[i] }}>
-                    <span className="s-rank">{rank + 1}</span>
-                    <Avatar seat={i} size={38} masked={i === t.insider} />
-                    <span className="s-name">{SEAT_NAMES[i]}{i === mySeat && <em>You</em>}</span>
-                    <span className={`s-pnl num ${last >= 0 ? "up" : "down"}`}>{chips(last)}</span>
-                    {got > 0 && <span className="s-votes"><Icon name="gavel" size={12} />{got}</span>}
-                    <span className="s-meta">{i === t.insider ? <b className="s-ins">Insider</b> : v !== NONE ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[v] }} />{SEAT_NAMES[v]}</> : "no vote"}</span>
-                  </div>
-                );
-              })}
+              {ranked.map((s, rank) => (
+                <div key={s.seat} className={`suspect score ${s.seat === curSnap.insider ? "insider" : ""} ${s.seat === curSnap.mySeat ? "self" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[s.seat] }}>
+                  <span className="s-rank">{rank + 1}</span>
+                  <Avatar seat={s.seat} size={38} masked={s.seat === curSnap.insider} />
+                  <span className="s-name">{s.name}{s.seat === curSnap.mySeat && <em>You</em>}</span>
+                  <span className={`s-pnl num ${Math.round(s.last) > 0 ? "up" : Math.round(s.last) < 0 ? "down" : ""}`}>{chips(s.last)}</span>
+                  {s.votesGot > 0 && <span className="s-votes"><Icon name="gavel" size={12} />{s.votesGot}</span>}
+                  <span className="s-meta">{s.seat === curSnap.insider ? <b className="s-ins">Insider</b> : s.suspect !== NONE ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[s.suspect] }} />{SEAT_NAMES[s.suspect]}</> : "no vote"}</span>
+                  {rank === 0 && <span className="s-top">Top trader</span>}
+                </div>
+              ))}
             </div>
           </div>
         )}
