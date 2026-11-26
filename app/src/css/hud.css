@@ -1,0 +1,329 @@
+/* HUD chip & typography consistency, responsive proof drawer, toast placement */
+
+#root .bar .iconbtn,
+#root .bar .plaque,
+#root .bar .sealed,
+#root .bar .phase,
+#root .bar .quote {
+  height: var(--chip-h);
+  border-radius: var(--chip-r);
+  border: var(--chip-border);
+  background: var(--chip-bg);
+  box-sizing: border-box;
+  font-family: var(--hud);
+  font-variant-numeric: tabular-nums;
+}
+
+#root .bar .iconbtn.on {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: #1a1403;
+}
+
+#root .bar .plaque {
+  display: inline-grid;
+  align-content: center;
+  gap: 2px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+#root .bar .plaque b {
+  font: 700 var(--t-sm)/1 var(--hud);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#root .bar .plaque span {
+  font: 600 var(--t-xs)/1 var(--hud);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#root .bar .sealed.rollup-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  font: 700 var(--t-sm)/1 var(--hud);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--up);
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.08s, background 0.15s, border-color 0.15s;
+}
+
+#root .bar .sealed.rollup-chip:hover {
+  background: var(--ink-3);
+  border-color: rgba(31, 229, 142, 0.55);
+}
+
+#root .bar .sealed.rollup-chip:active {
+  transform: translateY(2px);
+}
+
+#root .bar .rollup-short {
+  display: none;
+}
+
+#root .bar .cheatbtn {
+  width: auto;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+#root .bar .cheatbtn-label {
+  font: 700 var(--t-sm)/1 var(--hud);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+#root .bar .quote {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  backdrop-filter: blur(8px);
+}
+
+#root .bar .clock b {
+  font: 700 var(--t-lg)/1 var(--hud);
+  font-variant-numeric: tabular-nums;
+}
+
+#root .bar .clock span {
+  font: 700 var(--t-xs)/1 var(--hud);
+  font-variant-numeric: tabular-nums;
+}
+
+#root .bar .phase {
+  padding: 0 14px;
+  font: 700 var(--t-sm)/1 var(--hud);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Uniform tabular numbers across all stage/HUD elements; numbers use Barlow Condensed */
+#root * {
+  font-variant-numeric: tabular-nums;
+}
+
+#root .pnl,
+#root .mine {
+  font-family: var(--hud);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes cheatPulse {
+  0%, 100% {
+    box-shadow: 0 3px 0 rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 197, 49, 0.35), 0 3px 0 rgba(0, 0, 0, 0.45);
+    border-color: var(--gold);
+  }
+}
+
+/* Proof drawer copy and on-chain explorer link */
+#root .drawer .drawer-head h2,
+#root .drawer .drawer-head b,
+#root .drawer .drawer-head span {
+  font-family: var(--hud);
+  font-variant-numeric: tabular-nums;
+}
+
+.proof-lead {
+  margin: 0 0 10px;
+  font: 500 var(--t-sm)/1.4 var(--body);
+  color: var(--text);
+}
+
+.drawer-body .muted.small {
+  font-family: var(--body);
+  font-size: var(--t-xs);
+}
+
+.proof-link-row {
+  margin: 0 0 12px;
+}
+
+.proof-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: var(--chip-r);
+  border: var(--chip-border);
+  background: var(--ink-2);
+  color: var(--cool);
+  font: 700 var(--t-xs)/1 var(--hud);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.proof-link:hover {
+  background: var(--ink-3);
+  border-color: var(--cool);
+}
+
+/* Desktop drawer stays clear of clock (top) and Buy/Sell deck (bottom) */
+#root .drawer {
+  top: calc(76px + var(--safe-t));
+  right: calc(16px + var(--safe-r));
+  bottom: calc(146px + var(--safe-b));
+  max-height: calc(100svh - 230px - var(--safe-t) - var(--safe-b));
+  width: min(390px, calc(100vw - 32px));
+}
+
+#root .drawer .cheats button span {
+  font-family: var(--body);
+}
+
+/* Toast positioned clear of clock, rolechip, and Buy/Sell */
+#root .toast,
+#root .ui-vote .toast,
+#root .ui-reveal .toast {
+  top: calc(100px + var(--safe-t));
+  bottom: auto;
+  font-family: var(--hud);
+  font-size: var(--t-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 820px) {
+  #root .bar {
+    --chip-h: 32px;
+    --chip-r: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: calc(6px + var(--safe-t)) calc(8px + var(--safe-r)) 6px calc(8px + var(--safe-l));
+  }
+
+  #root .bar-left,
+  #root .bar-right {
+    gap: 3px;
+    flex-shrink: 0;
+  }
+
+  #root .bar-mid {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  #root .bar .plaque {
+    padding: 0 6px;
+    gap: 1px;
+  }
+
+  #root .bar .quote {
+    display: none;
+  }
+
+  #root .bar .plaque b,
+  #root .bar .plaque span {
+    font-size: var(--t-xs);
+  }
+
+  #root .bar .rollup-full {
+    display: none;
+  }
+
+  #root .bar .rollup-short {
+    display: inline;
+  }
+
+  #root .bar .sealed.rollup-chip {
+    display: inline-flex;
+    padding: 0 7px;
+    gap: 4px;
+    font-size: var(--t-xs);
+  }
+
+  #root .bar .iconbtn {
+    min-width: var(--chip-h);
+    height: var(--chip-h);
+    padding: 0;
+  }
+
+  #root .bar .cheatbtn {
+    width: var(--chip-h);
+    min-width: var(--chip-h);
+    padding: 0;
+  }
+
+  #root .bar .cheatbtn.pulse-once {
+    animation: cheatPulse 1.3s var(--ease) 2;
+  }
+
+  #root .bar .cheatbtn-label {
+    display: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #root .bar .cheatbtn.pulse-once {
+      animation: none;
+    }
+  }
+
+  #root .bar .clock {
+    width: 44px;
+    height: 44px;
+    margin: 0;
+  }
+
+  #root .bar .clock b {
+    font-size: var(--t-md);
+    margin-top: -5px;
+  }
+
+  #root .bar .clock span {
+    bottom: 6px;
+    font-size: 9px;
+  }
+
+  #root .bar .phase {
+    padding: 0 7px;
+    font-size: var(--t-xs);
+    max-width: 118px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Bottom sheet above the trade/vote dock so Sell & Buy remain visible and usable */
+  #root .drawer {
+    position: fixed;
+    left: calc(8px + var(--safe-l));
+    right: calc(8px + var(--safe-r));
+    top: auto;
+    bottom: calc(150px + var(--safe-b));
+    width: auto;
+    height: auto;
+    max-height: min(56svh, calc(100svh - 216px - var(--safe-t) - var(--safe-b)));
+    border-radius: 16px;
+    padding-bottom: 0;
+  }
+
+  #root .toast,
+  #root .ui-vote .toast,
+  #root .ui-reveal .toast {
+    top: calc(70px + var(--safe-t));
+    bottom: auto;
+  }
+}
