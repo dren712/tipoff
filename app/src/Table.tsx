@@ -46,8 +46,12 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const rumourSeen = useRef<Map<number, number>>(new Map());
   const prevPrice = useRef(0);
   const settledPos = useRef({ round: "", pos: 0, trades: 0 });
-  const tradeRef = useRef({ inFlight: 0, queued: 0, busy: false });
+  const tradeRef = useRef({ inFlight: 0, flightTrades: 0, queued: 0, busy: false });
   const liveRef = useRef({ seatIdx: -1, round: "", tStart: 0, phase: 0 });
+  const pendingFlight = () =>
+    settledPos.current.round === liveRef.current.round && settledPos.current.trades > tradeRef.current.flightTrades
+      ? 0
+      : tradeRef.current.inFlight;
   const shownRole = useRef("");
   const voteLock = useRef("");
   const sitAttempt = useRef({ count: 0, triedSeat: -1 });
@@ -74,7 +78,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       if (hist.current.round !== round) {
         hist.current = { round, points: [], marks: [], seen: next.phase === 2 ? Math.max(0, next.tapeLen - next.tape.length) : next.tapeLen, shocks: next.phase === 2 ? next.shocksSeen : 0, phase: hist.current.phase };
         rumourSeen.current.clear();
-        tradeRef.current = { inFlight: 0, queued: 0, busy: false };
+        tradeRef.current = { inFlight: 0, flightTrades: 0, queued: 0, busy: false };
         setIntent({ inFlight: 0, queued: 0 });
       }
       const nsIdx = next.seats.findIndex((s) => s.player.equals(me));
@@ -257,6 +261,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     const liveNow = lv.phase === 2 && Date.now() / 1000 - lv.tStart < ROUND_SECS;
     if (!liveNow || lv.seatIdx < 0) {
       tr.inFlight = 0;
+      tr.flightTrades = 0;
       tr.queued = 0;
       setIntent({ inFlight: 0, queued: 0 });
       return;
@@ -267,11 +272,13 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     tr.queued = 0;
     if (clamped === 0) {
       tr.inFlight = 0;
+      tr.flightTrades = 0;
       setIntent({ inFlight: 0, queued: 0 });
       return;
     }
     tr.busy = true;
     tr.inFlight = clamped;
+    tr.flightTrades = tradesBefore;
     setIntent({ inFlight: clamped, queued: 0 });
     try {
       const r = await actions.trade(session, key, lv.seatIdx, clamped);
@@ -282,8 +289,10 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         settledPos.current.trades += 1;
       }
       tr.inFlight = 0;
+      tr.flightTrades = 0;
     } catch (e: any) {
       tr.inFlight = 0;
+      tr.flightTrades = 0;
       tr.queued = 0;
       setIntent({ inFlight: 0, queued: 0 });
       setToast(`Trade failed: ${e?.message ?? e}`);
@@ -304,7 +313,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     if (!seat || !liveNow || lv.seatIdx < 0) return;
     const tr = tradeRef.current;
     const basePos = settledPos.current.round === lv.round ? settledPos.current.pos : seat.pos;
-    const curIntent = basePos + tr.inFlight + tr.queued;
+    const curIntent = basePos + pendingFlight() + tr.queued;
     const nextIntent = Math.max(-MAX_POS, Math.min(MAX_POS, curIntent + d));
     const add = nextIntent - curIntent;
     if (add === 0) return;
@@ -423,7 +432,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const R = 25, C = 2 * Math.PI * R;
   const leverage = Number((chainMod as { LEVERAGE?: number }).LEVERAGE ?? 0);
   const confirmedPos = seat ? (settledPos.current.round === round ? settledPos.current.pos : seat.pos) : 0;
-  const intentPos = Math.max(-MAX_POS, Math.min(MAX_POS, confirmedPos + intent.inFlight + intent.queued));
+  const intentPos = Math.max(-MAX_POS, Math.min(MAX_POS, confirmedPos + pendingFlight() + intent.queued));
   const activeRumourIdx = trading ? t.shocks.findIndex((s) => isRumour(s) && s.at > elapsed) : -1;
   const activeRumour = activeRumourIdx >= 0 ? t.shocks[activeRumourIdx] : null;
   const rumourTruth = activeRumour && insider && current?.shocks[activeRumourIdx]
