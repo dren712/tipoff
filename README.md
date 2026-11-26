@@ -47,7 +47,7 @@ Built for Solana Blitz v10.
 | Sealed votes | Votes are written to each voter's private seat account and only revealed at settlement | Votes would be visible, so players could copy or counter them |
 | A fair draw | MagicBlock VRF inside the rollup, mixed with randomness from every seated player. The salt is published at the end so anyone can recheck the draw | The operator could pick the insider |
 | Fast trading on a live price | Free transactions in about 0.5 s (median 520 ms in a scripted run), reading the SOL/USD oracle inside the rollup | Every trade would cost a fee and a wallet confirmation |
-| A permanent record | Each settled table, round record and the season board are committed back to Solana | — |
+| A permanent record | Each settled table, round record and the season board are committed back to Solana | Fast moves and a permanent record would need two different systems |
 
 ## Proof
 

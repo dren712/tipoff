@@ -10,7 +10,7 @@ A 60-second trading game where one of six players secretly knows the news, and o
 
 ## 100-word description
 
-Tipoff is a social deduction trading game on Solana. Six players trade a live SOL price for 60 seconds. One of them, picked by MagicBlock's verifiable randomness, secretly knows when four news shocks will hit. Everyone else watches the public trade tape and rumours for the tell, then casts one sealed vote: catch the insider and share their profit, or let them escape and double it. The secret lives in a private rollup that nobody can read, not even the operator. Trades confirm in about half a second with no wallet and no fees, and results are committed back to Solana.
+Tipoff is a social deduction trading game on Solana. Six players trade a live SOL price for 60 seconds. One of them, picked by MagicBlock's verifiable randomness, secretly knows when four news shocks will hit. Everyone else watches the public trade tape and rumours for the tell, then casts one sealed vote: catch the insider and split their profit; miss, and the insider's profit doubles. The secret lives in a private rollup that nobody can read, not even the operator. Trades confirm in about half a second with no wallet and no fees, and results are committed back to Solana.
 
 ## 300-word description
 
