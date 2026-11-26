@@ -1,6 +1,10 @@
 # Tipoff
 
-A 60-second Solana trading game where one secret insider knows the news early.
+A 60-second trading game where one of six players secretly knows the news. If the shock list were readable, everyone would be the insider, so the game only works inside a MagicBlock private rollup.
+
+- **Play (no wallet):** https://dren712.github.io/tipoff/
+- **Video:** VIDEO_URL_HERE
+- **Proof:** [docs/ATTACKS.md](docs/ATTACKS.md) | [Solana Explorer](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet)
 
 ![Live 3D trading floor on desktop](docs/screens/desktop-live.png)
 
@@ -10,11 +14,7 @@ A 60-second Solana trading game where one secret insider knows the news early.
   <img src="docs/screens/phone-live.png" alt="Live trading screen on mobile" width="12%" />
 </p>
 
-Play it: https://dren712.github.io/tipoff/
-
-Video: TODO
-
-Six traders share one live SOL/USD price while four news shocks hit it during a 60-second round. MagicBlock VRF secretly picks one seat as the insider and delivers the shock schedule only to that player's private account. Every position move prints publicly on a 3D floor and trade tape, and when trading closes everyone casts a single sealed accusation.
+Six traders share one live SOL/USD price (`12x` oracle move clamped at `+/-600` bps) while four news shocks hit it during a 60-second round. MagicBlock VRF secretly picks one seat as the insider and delivers the shock schedule only to that player's private account. Every position move prints publicly on a 3D floor and trade tape, and when trading closes everyone casts a single sealed accusation.
 
 Built for Solana Blitz v10 on MagicBlock's Private Ephemeral Rollup.
 
@@ -42,24 +42,28 @@ All amounts are chips (`1,000` chips per lot at the opening price, +/-`5` lots m
 - The insider is **caught** if they receive at least two votes and strictly more votes than any other seat (own votes ignored). A caught insider loses their profit, pays a `100`-chip fine, and their profit is divided equally among the players who accused them.
 - If the insider is not caught, positive profit doubles; if their profit is zero or negative, they pay a `50`-chip blown-tip penalty.
 
-## Why this needs MagicBlock
+## What you win and keep
 
-Tipoff cannot run on plain Solana because both hidden game state and sub-second trading are required in the same loop:
+Rounds award play chips (`1,000` chips per lot, `+/-5` lots max, plus `100` / `-50` normal or `200` / `-150` all-in accusation stakes). Human players' settled results persist beyond a single round on the shared `Board` PDA (top `50` entries tracking `score`, `rounds`, `caught`, `escapes`, `streak`, and `best`), updated inside the rollup by `post_round` and committed to Solana devnet via `commit_board` (`BOARD_ADDRESS_HERE`).
 
-- **Hidden insider and shocks in the private rollup:** `Secret` holds the salt, insider index, and four shock timings under an empty TEE permission access list on validator `MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo`, so nobody—not even the table authority—can read it. Each `SeatPrivate` account restricts reads strictly to that seat's wallet and session key.
-- **VRF draw:** `start_round` requests randomness from MagicBlock VRF inside the rollup, and `on_random` checks `VRF_CALLBACK_IDENTITY` and the active request nonce before hashing the VRF output with the prior salt and player sit entropy to derive the insider and shocks.
-- **Sealed votes:** Every accusation writes only to the voter's `SeatPrivate` account during the 15-second voting window. No player or operator can read anyone else's vote until `settle` unseals all votes together.
-- **Fee-free sub-second moves:** Seated players trade and vote inside the TEE using a browser-generated guest keypair, requiring no wallet popups and no SOL for fees. Confirmations measured in the browser and `scripts/round.ts` take about `350` to `500 ms` (median `520 ms` in one scripted run).
-- **Commit back to Solana:** Once a round settles, `checkpoint` commits `Table` to Solana devnet and triggers a `record_round` Magic Action that records the round number and account digest into the base-layer `Ledger` PDA. A delegated house fee payer and the validator's Magic fee vault fund commits after rounds with human players, plus a 15-minute heartbeat.
+## Why each MagicBlock piece is needed
 
-| MagicBlock piece | What it does in Tipoff | Without it |
+Tipoff cannot run on plain Solana because both hidden game state and sub-second trading are required in the same loop. Seated players confirm trades and votes inside the TEE using a browser guest keypair in about 0.5 s per move (median 520 ms in a scripted run), with zero fees and no wallet popups.
+
+| Mechanic (`rules.rs`) | MagicBlock piece | Why it cannot run on plain L1 |
 |---|---|---|
-| Private Ephemeral Rollup (TEE) | Holds `Secret` and every `SeatPrivate` inside the TEE | Anyone could read who the insider is |
-| Ephemeral permissions | `Secret` has an empty member list; `SeatPrivate` allows only that seat's keys | The operator could read the insider or votes |
-| VRF (inside the rollup) | Draws the randomness behind the insider and four shocks | The operator could choose them |
-| Price oracle | Live Pyth Lazer SOL/USD feed republished on the rollup | No live market to trade against |
-| Zero-fee rollup transactions + guest keys | One-tap trades and final vote with no wallet popup | A popup and a fee per action |
-| Commit + Magic Action | Commits settled `Table` to Solana and updates `Ledger` via `record_round` | Settled rounds stay only on the rollup |
+| Hidden insider and shocks (`draw_round`) | Private Ephemeral Rollup (`Secret` empty member list + `SeatPrivate` access control) | Public L1 account bytes would let anyone read the shock list and act as insider |
+| Rumours (`RUMOUR_LEAD = 5 s`, 2/3 match rate) | Rollup `refresh` reading `Secret` while writing only `+1`/`-1` bps claim onto public `Table` | True shock direction stays hidden on the TEE until `at` lands |
+| Sealed and all-in votes (`0..=5`, `CONVICTION = 8` for `8..=13`) | Private `SeatPrivate` accounts + permissionless `settle` | Votes stay hidden per seat until trading and voting close; second votes revert (`AlreadyVoted`) |
+| The draw (`draw_round`) | MagicBlock VRF inside the rollup (`start_round` / `on_random`) + `revealed_salt` on `settle` | Operator cannot choose the insider, and anyone can verify `draw_round` from `revealed_salt` |
+| The price (`LEVERAGE = 12`x, `+/-600` bps clamp) | Live Pyth Lazer SOL/USD feed read inside the rollup (`tick` & `trade`) + zero-fee guest keys | Live market updates and ~0.5 s per move (`520 ms` scripted median) with no wallet popups |
+| The board and ledger (`post_board_round` / `Board` / `Ledger`) | Rollup commit (`commit_board`, `checkpoint` + `record_round` Magic Action) | Moves and scores run fast inside the TEE, then commit permanently to Solana |
+
+Also backing every move:
+
+- **Hidden state permissions:** `Secret` holds salt, insider index, and four shocks under an empty member list on validator `MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo`, while `SeatPrivate` restricts reads strictly to that seat's wallet and session key.
+- **VRF mixing:** `on_random` checks `VRF_CALLBACK_IDENTITY` and the active request nonce before hashing the VRF output with the prior salt and player `sit` entropy.
+- **Solana base-layer commit:** `checkpoint` commits `Table` to Solana devnet and dispatches a `record_round` Magic Action into `Ledger` (`Dx1D48i2W3UTZpnJF1SxocVybbBDT73RjTVHycLvgcAu`); `commit_board` commits `Board` after rounds with human entries.
 
 ## Proof
 
