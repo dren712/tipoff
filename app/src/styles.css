@@ -61,26 +61,41 @@ h1, h2, p { margin: 0; }
 @keyframes load { from { transform: translateX(-20%); } to { transform: translateX(170%); } }
 
 /* ───────── Lobby ───────── */
-.lobby { position: relative; height: 100%; overflow: hidden; display: grid; grid-template-rows: auto 1fr auto; padding: calc(18px + var(--safe-t)) calc(28px + var(--safe-r)) calc(18px + var(--safe-b)) calc(28px + var(--safe-l)); }
+.lobby { position: relative; height: 100%; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(380px, 500px); grid-template-rows: auto minmax(0, 1fr) auto; column-gap: 28px; padding: calc(16px + var(--safe-t)) calc(28px + var(--safe-r)) calc(14px + var(--safe-b)) calc(28px + var(--safe-l)); }
 .backdrop { position: absolute; inset: 0; }
 .backdrop canvas { display: block; width: 100% !important; height: 100% !important; }
 .lobby-shade { position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(90deg, rgba(7, 10, 28, .86) 0%, rgba(7, 10, 28, .5) 30%, rgba(7, 10, 28, 0) 52%), linear-gradient(0deg, rgba(7, 10, 28, .92) 0%, rgba(7, 10, 28, .45) 20%, rgba(7, 10, 28, 0) 34%), linear-gradient(180deg, rgba(7, 10, 28, .6), rgba(7, 10, 28, 0) 14%); }
 .lobby > header, .lobby > section { position: relative; z-index: 1; }
-.lobby-top { display: flex; align-items: center; gap: 12px; }
+.lobby-top { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; gap: 12px; }
 .brand { display: flex; align-items: center; gap: 10px; }
-.pitch { align-self: center; max-width: 560px; display: grid; gap: 18px; padding: 12px 0; }
-.pitch h1 { font: 400 clamp(34px, 4.4vw, 62px)/1.02 var(--sign); letter-spacing: .005em; text-wrap: balance; text-shadow: 0 4px 0 rgba(0, 0, 0, .5); }
-.pitch p { font-size: 18px; color: #c9d0f2; max-width: 46ch; }
-.cta { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-top: 6px; }
-.rooms { display: grid; gap: 12px; }
+.pitch { grid-column: 1; grid-row: 2; align-self: center; max-width: 600px; display: grid; gap: 13px; padding: 8px 0; }
+.pitch h1 { font: 400 clamp(32px, 3.8vw, 56px)/1.02 var(--sign); letter-spacing: .005em; text-wrap: balance; text-shadow: 0 4px 0 rgba(0, 0, 0, .5); }
+.pitch p { font-size: 17.5px; color: #d6ddfa; max-width: 52ch; text-wrap: pretty; }
+.cta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 2px; }
+.cta .btn .spinner { border-color: rgba(26, 20, 3, .28); border-top-color: #1a1403; }
+.cta-note { display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 9px; background: rgba(7, 10, 28, .88); backdrop-filter: blur(8px); box-shadow: inset 0 0 0 1px var(--line); font-size: 13.5px; font-weight: 500; color: var(--text); }
+.pitch-proof { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; justify-items: start; font-size: 13.5px; color: #dce2fc; }
+.pitch-proof li { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 8px; background: rgba(7, 10, 28, .78); box-shadow: inset 0 0 0 1px var(--line); }
+.pitch-proof li .icon { color: var(--up); }
+.pitch-proof a { color: var(--gold); text-decoration: underline; text-underline-offset: 2px; }
+.pitch-built { font: 600 13.5px/1.2 var(--hud); letter-spacing: .03em; color: #cbd3f5; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-self: start; padding: 4px 10px; border-radius: 8px; background: rgba(7, 10, 28, .78); box-shadow: inset 0 0 0 1px var(--line); }
+.pitch-built b { color: var(--text); font-weight: 700; }
+.lobby .lb { grid-column: 2; grid-row: 2; align-self: center; }
+.rooms { grid-column: 1 / -1; grid-row: 3; display: grid; gap: 10px; }
 .how { list-style: none; margin: 0; padding: 0; display: flex; gap: 22px; flex-wrap: wrap; font: 600 16px/1.2 var(--hud); letter-spacing: .02em; }
 .how li { display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .how li .icon { color: var(--gold); }
 .how li b { color: var(--text); text-transform: uppercase; letter-spacing: .05em; }
 .how li + li::before { content: ""; width: 18px; height: 2px; background: var(--line-2); margin-right: 14px; }
 .roomrow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-.room { position: relative; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; text-align: left; padding: 14px 14px 14px 12px; border-radius: 16px; background: var(--panel); backdrop-filter: blur(10px);
+.room-slot { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.room-actions { display: flex; align-items: center; }
+.room-share { justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: 8px; background: rgba(14, 18, 48, .92); box-shadow: inset 0 0 0 1px var(--line-2); font: 600 12.5px/1 var(--hud); letter-spacing: .03em; color: #e2e7ff; transition: filter .12s, background .15s; }
+.room-share:hover { filter: brightness(1.18); }
+.room-share.copied { background: rgba(31, 229, 142, .18); box-shadow: inset 0 0 0 1px rgba(31, 229, 142, .55); color: var(--up); }
+.room-copy-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.room { position: relative; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; text-align: left; padding: 14px 14px 14px 12px; border-radius: 16px; background: var(--panel); backdrop-filter: blur(10px); width: 100%;
   box-shadow: inset 0 0 0 2px var(--line), 0 6px 0 rgba(0, 0, 0, .5); transition: transform .12s var(--ease), box-shadow .12s; }
 .room:hover:not(:disabled) { transform: translateY(-3px); box-shadow: inset 0 0 0 2px var(--gold), 0 9px 0 rgba(0, 0, 0, .5); }
 .room:active:not(:disabled) { transform: translateY(3px); box-shadow: inset 0 0 0 2px var(--gold), 0 2px 0 rgba(0, 0, 0, .5); }
@@ -96,7 +111,7 @@ h1, h2, p { margin: 0; }
 .room-state .muted { margin-left: auto; }
 .room-go { align-self: stretch; display: grid; place-items: center; padding: 0 14px; border-radius: 11px; font: 400 15px/1 var(--sign); background: var(--ink-3); color: var(--text); box-shadow: inset 0 0 0 1.5px var(--line-2); }
 .room-go.play { background: var(--gold); color: #1a1403; box-shadow: 0 3px 0 var(--gold-d); }
-.fineprint { font-size: 12.5px; color: #7d88b8; }
+.fineprint { font-size: 12.5px; color: #9ea8d6; }
 
 /* ───────── Game: the floor owns the viewport ───────── */
 .game { position: fixed; inset: 0; overflow: hidden; background: var(--ink); user-select: none; -webkit-user-select: none; }
@@ -329,6 +344,9 @@ h1, h2, p { margin: 0; }
   .pitch h1 { font-size: clamp(30px, 3.6vw, 46px); }
 }
 @media (max-width: 1180px) and (min-width: 821px) {
+  .lobby { grid-template-columns: 1fr; overflow-y: auto; height: 100%; gap: 16px; }
+  .lobby .lb { grid-column: 1; grid-row: auto; }
+  .rooms { grid-row: auto; }
   .sealed, .ping { display: none; }
   .roomrow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .feed { width: 200px; }
@@ -342,15 +360,19 @@ h1, h2, p { margin: 0; }
   .lobby-top { padding: calc(12px + var(--safe-t)) 14px 0; gap: 8px; }
   .lobby-top .wordmark { font-size: 22px; }
   .lobby-top .pill { height: 32px; padding: 0 10px; font-size: 13px; white-space: nowrap; }
-  .pitch { margin-top: calc(46dvh - 150px); padding: 0 16px; gap: 12px; max-width: none; }
-  .pitch h1 { font-size: clamp(28px, 8.4vw, 40px); }
-  .pitch p { font-size: 16px; }
-  .cta .btn { width: 100%; }
+  .pitch { margin-top: calc(34dvh - 115px); padding: 0 16px; gap: 10px; max-width: none; }
+  .pitch h1 { font-size: clamp(27px, 7.8vw, 38px); }
+  .pitch p { font-size: 15.5px; }
+  .cta .btn { width: 100%; min-height: 54px; font-size: 20px; }
   .cta { gap: 10px; justify-content: center; }
-  .rooms { padding: 20px 16px 0; }
+  .cta-note { width: 100%; justify-content: center; text-align: center; }
+  .pitch-proof { font-size: 12.5px; width: 100%; }
+  .pitch-proof li { width: 100%; }
+  .rooms { padding: 18px 16px 0; }
   .how { gap: 8px 16px; font-size: 15px; }
   .how li { flex: 1 1 100%; } .how li + li::before { display: none; }
   .roomrow { grid-template-columns: 1fr; gap: 12px; }
+  .room-share { min-height: 44px; min-width: 44px; padding: 0 12px; font-size: 13px; }
 
   .game { display: grid; grid-template-rows: auto minmax(280px, 1fr) auto auto; }
   .game.ui-vote, .game.ui-reveal, .game.ui-drum, .game.ui-idle, .game.ui-deal { grid-template-rows: auto minmax(250px, 1fr) auto auto; }
