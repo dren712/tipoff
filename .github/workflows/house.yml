@@ -1,6 +1,7 @@
 # Keeps the public tables alive: seats bots, requests the VRF draw, ticks, settles and
-# checkpoints. Each run lasts just under the 6-hour job limit. The hourly schedule keeps one
-# run queued behind the active one, so the next run starts as soon as the current one ends.
+# checkpoints. Each run lasts just under the 6-hour job limit and queues its own successor
+# as its first step, so the next run starts the moment this one ends. The hourly schedule
+# is only a backstop in case the chain is ever broken.
 name: House runner
 on:
   schedule:
@@ -9,17 +10,29 @@ on:
 concurrency:
   group: house
   cancel-in-progress: false
+permissions:
+  contents: read
+  actions: write
 jobs:
   house:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
+      - name: Queue the next run
+        run: gh workflow run house.yml --repo "$GITHUB_REPOSITORY" --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run house
+      - name: Run the house
+        run: |
+          started=$(date +%s)
+          timeout 335m npm run house || true
+          # A run that died early waits before handing over, so a crash cannot spin in a tight loop.
+          if [ $(( $(date +%s) - started )) -lt 600 ]; then sleep 240; fi
         env:
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
