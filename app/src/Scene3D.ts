@@ -1542,7 +1542,10 @@ export class Scene3D {
         this.camPos.set(0, last ? 9.6 : 9.9, 23.2 + z * 0.4);
         this.camLook.set(0, 1.15, 0);
       } else {
-        this.camPos.set(meX * 0.12, 12.8, 47 + z);
+        const targetZ = -1.5;
+        const depth = (48.5 + z) * Math.min(1, 1.6 / aspect);
+        const scale = 1 - 0.5 * (1 - depth / (48.5 + z));
+        this.camPos.set(meX * 0.12, 3.5 + 5 * scale, targetZ + depth);
         this.camLook.set(meX * 0.08, 3.5, -1.5);
         fov = last ? 22.2 : 22;
       }
@@ -1550,12 +1553,19 @@ export class Scene3D {
       this.camPos.set(meX + 1.6, 2.3, -4.6 * a);
       this.camLook.set(meX, 1.4, 0);
     } else if (stage === "vote" || stage === "drum") {
-      fov = portrait && stage === "vote" ? 55 : portrait ? 56 : 52;
-      const minDz = (portrait ? 6.8 : 6.3) / (Math.tan((fov * Math.PI) / 360) * aspect);
+      const portraitVote = portrait && stage === "vote";
+      const portraitDrum = portrait && stage === "drum";
+      fov = portrait ? 70 : 52;
+      const minDz = (portrait ? 9.8 : 6.3) / (Math.tan((fov * Math.PI) / 360) * aspect);
       const dolly = stage === "vote" ? Math.sin((t - this.stageAt) * 0.28) * 1.6 : 0;
       const focus = this.hot >= 0 ? laneX(this.hot) * 0.35 : dolly * 0.65;
-      this.camPos.set(focus, portrait ? (stage === "vote" ? 3.55 : 2.9) : 2.65, 7.2 + Math.max(9.6, minDz));
-      this.camLook.set(dolly * 0.35 + (this.hot >= 0 ? laneX(this.hot) * 0.15 : 0), portrait ? (stage === "vote" ? 3.35 : 2.45) : 2.1, 6.6);
+      const targetZ = portrait ? 5.8 : 6.6;
+      this.camPos.set(focus, portraitVote ? 4.1 : portraitDrum ? 4.9 : 2.65, targetZ + Math.max(9.6, minDz));
+      this.camLook.set(
+        dolly * 0.35 + (this.hot >= 0 ? laneX(this.hot) * 0.15 : 0),
+        portraitVote ? 3.9 : portraitDrum ? 4.6 : 2.1,
+        targetZ,
+      );
     } else if (stage === "reveal" && this.bots[v!.insider]) {
       const p = this.bots[v!.insider].root.position;
       const el = t - this.stageAt;
