@@ -179,7 +179,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const voteLock = useRef("");
   const sitAttempt = useRef({ count: 0, triedSeat: -1 });
   const autoSitting = useRef(false);
-  const me = session.kp.publicKey;
+  const me = session.id;
   const mySeatRef = useRef(-1);
   const hostRef = useRef<HTMLDivElement>(null);
   const tagRefs = useRef<(HTMLElement | null)[]>([]);
@@ -395,7 +395,9 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       "Seated",
       () => actions.sit(session, key, target),
       () => {
-        if (sitAttempt.current.count === 0) {
+        if (session.player) {
+          setWantSit(false);
+        } else if (sitAttempt.current.count === 0) {
           sitAttempt.current = { count: 1, triedSeat: target };
         } else {
           setWantSit(false);

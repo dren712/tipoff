@@ -1,7 +1,7 @@
 // Everything that talks to Solana and the MagicBlock TEE rollup.
 import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
 import { ComputeBudgetProgram, Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
-import { getAuthToken, permissionPdaFromAccount } from "@magicblock-labs/ephemeral-rollups-sdk";
+import { DELEGATION_PROGRAM_ID, getAuthToken, permissionPdaFromAccount } from "@magicblock-labs/ephemeral-rollups-sdk";
 import nacl from "tweetnacl";
 import { Buffer } from "buffer";
 import idl from "./idl/tipoff.json";
@@ -17,6 +17,7 @@ export const MAX_POS = 5;
 export const NONE = 255;
 export const FIRST_TABLE = 7100;
 export const TABLES = 4;
+export const TEE_VALIDATOR = new PublicKey("MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo");
 export const LOT = 1e9;
 export const LEVERAGE = 12;
 export const CONVICTION = 8;
@@ -32,6 +33,7 @@ export const secretPda = (t: PublicKey) => pda(Buffer.from("secret"), t.toBuffer
 export const seatPda = (t: PublicKey, i: number) => pda(Buffer.from("seat"), t.toBuffer(), Buffer.from([i]));
 export const ledgerPda = () => pda(Buffer.from("ledger"));
 export const boardPda = () => pda(Buffer.from("board"));
+export const playerPda = (wallet: PublicKey) => pda(Buffer.from("player"), wallet.toBuffer());
 
 export type Shock = { at: number; bps: number };
 export type Seat = { player: PublicKey; session: PublicKey; pos: number; cash: BN; trades: number; last: BN; score: BN; rounds: number };
@@ -56,19 +58,25 @@ export function guestKey(): Keypair {
   return kp;
 }
 
-const wallet = (kp: Keypair) => ({
+const sessionWallet = (kp: Keypair) => ({
   publicKey: kp.publicKey,
   signTransaction: async (tx: any) => (tx.partialSign(kp), tx),
   signAllTransactions: async (txs: any[]) => (txs.forEach((t) => t.partialSign(kp)), txs),
 });
 
-export type Session = { kp: Keypair; conn: Connection; program: Program<any> };
+export type Session = { kp: Keypair; id: PublicKey; player: PublicKey | null; conn: Connection; program: Program<any> };
 
 /// Signs the TEE's challenge and opens an authenticated connection to the private rollup.
-export async function openSession(kp: Keypair): Promise<Session> {
+export async function openSession(kp: Keypair, wallet?: PublicKey): Promise<Session> {
   const { token } = await getAuthToken(TEE_RPC, kp.publicKey, async (m) => nacl.sign.detached(m, kp.secretKey));
   const conn = new Connection(`${TEE_RPC}?token=${token}`, "confirmed");
-  return { kp, conn, program: new Program(idl as any, new AnchorProvider(conn, wallet(kp) as any, { commitment: "confirmed" })) };
+  return {
+    kp,
+    id: wallet ?? kp.publicKey,
+    player: wallet ? playerPda(wallet) : null,
+    conn,
+    program: new Program(idl as any, new AnchorProvider(conn, sessionWallet(kp) as any, { commitment: "confirmed" })),
+  };
 }
 
 export const base = new Connection(BASE_RPC, "confirmed");
@@ -108,10 +116,10 @@ const entropy = () => [...crypto.getRandomValues(new Uint8Array(32))];
 export const actions = {
   sit: async (s: Session, table: PublicKey, i: number) =>
     send(s, await s.program.methods.sit(entropy())
-      .accountsPartial({ signer: s.kp.publicKey, player: null, table, seat: seatPda(table, i), perm: permFor(seatPda(table, i)) }).transaction()),
+      .accountsPartial({ signer: s.kp.publicKey, player: s.player, table, seat: seatPda(table, i), perm: permFor(seatPda(table, i)) }).transaction()),
   stand: async (s: Session, table: PublicKey, i: number) =>
     send(s, await s.program.methods.stand()
-      .accountsPartial({ signer: s.kp.publicKey, player: null, table, seat: seatPda(table, i), perm: permFor(seatPda(table, i)) }).transaction()),
+      .accountsPartial({ signer: s.kp.publicKey, player: s.player, table, seat: seatPda(table, i), perm: permFor(seatPda(table, i)) }).transaction()),
   trade: async (s: Session, table: PublicKey, i: number, delta: number) =>
     send(s, await s.program.methods.trade(i, delta).accountsPartial({ signer: s.kp.publicKey, table, priceFeed: FEED }).transaction()),
   vote: async (s: Session, table: PublicKey, i: number, suspect: number) =>

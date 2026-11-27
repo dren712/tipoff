@@ -111,7 +111,7 @@ export function Career({ session, round, chips }: {
       if (!live) return;
       if (b) {
         const slot = round.tableId % Math.max(1, b.posted.length);
-        const me = session.kp.publicKey;
+        const me = session.id;
         const mine = b.entries.find((e) => !e.player.equals(ZERO) && e.player.equals(me));
         const postedRound = b.posted[slot]?.toNumber() ?? 0;
         if (postedRound < Number(round.round) && (!preBest.current || preBest.current.roundKey !== roundKey)) {
@@ -126,7 +126,7 @@ export function Career({ session, round, chips }: {
     return () => { live = false; clearTimeout(t1); clearTimeout(t2); };
   }, [session, round.tableId, round.round]);
 
-  const me = session.kp.publicKey;
+  const me = session.id;
   let onChainEntry: BoardEntry | null = null;
   let posLabel = "";
   let boardHasRound = false;

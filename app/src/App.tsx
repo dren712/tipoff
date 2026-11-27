@@ -1,14 +1,97 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { FIRST_TABLE, PID, ROUND_SECS, SEATS, Session, TABLES, Table, VOTE_SECS, ZERO, equity, explorer, fetchTable, guestKey, openSession, short, tablePda } from "./chain";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, Transaction } from "@solana/web3.js";
+import { FIRST_TABLE, PID, ROUND_SECS, SEATS, Session, TABLES, Table, TEE_VALIDATOR, VOTE_SECS, ZERO, base, equity, explorer, fetchTable, guestKey, openSession, playerPda, short, tablePda } from "./chain";
 import { Avatar, SEAT_COLORS } from "./Avatar";
 import { Icon, Logo } from "./Icon";
 import { Scene3D } from "./Scene3D";
 import { TableView } from "./Table";
 import { Leaderboard } from "./Leaderboard";
 
+const WALLET_TITLE = "Optional. Your season record follows your wallet. Moves still need no pop-ups.";
+
+async function walletSessionKey(
+  wallet: PublicKey,
+  signMessage?: (message: Uint8Array) => Promise<Uint8Array>,
+): Promise<Keypair> {
+  if (!signMessage) throw new Error("This wallet can't sign messages; play as guest");
+  const cacheKey = `tipoff-wallet-session:${wallet.toBase58()}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(cached)));
+  } catch {
+    try { localStorage.removeItem(cacheKey); } catch {}
+  }
+  const message = new TextEncoder().encode(`Tipoff session key v1\n${wallet.toBase58()}`);
+  const signature = await signMessage(message);
+  const signatureBuffer = new ArrayBuffer(signature.byteLength);
+  new Uint8Array(signatureBuffer).set(signature);
+  const seed = new Uint8Array(await crypto.subtle.digest("SHA-256", signatureBuffer));
+  const kp = Keypair.fromSeed(seed);
+  try { localStorage.setItem(cacheKey, JSON.stringify([...kp.secretKey])); } catch {}
+  return kp;
+}
+
+async function prepareWalletProfile(
+  wallet: PublicKey,
+  sessionKey: Keypair,
+  session: Session,
+  sendWalletTransaction: (tx: Transaction, connection: Connection) => Promise<string>,
+): Promise<string | null> {
+  const player = playerPda(wallet);
+  const info = await base.getAccountInfo(player, "confirmed");
+  const delegated = !!info && info.owner.equals(DELEGATION_PROGRAM_ID);
+  let playerAccount: any = null;
+
+  if (info) {
+    if (!info.owner.equals(PID) && !delegated) throw new Error("Could not read this wallet's profile on devnet");
+    try {
+      playerAccount = session.program.coder.accounts.decode("player", info.data);
+    } catch {
+      if (delegated) playerAccount = await (session.program.account as any).player.fetch(player);
+      else throw new Error("Could not read this wallet's profile on devnet");
+    }
+    if (!playerAccount.session.equals(sessionKey.publicKey))
+      throw new Error("This wallet's profile uses a different session key");
+  }
+
+  if (delegated) return null;
+  if ((await base.getBalance(wallet, "confirmed")) < 0.01 * LAMPORTS_PER_SOL) {
+    try {
+      const airdrop = await base.requestAirdrop(wallet, 0.5 * LAMPORTS_PER_SOL);
+      await base.confirmTransaction(airdrop, "confirmed");
+    } catch {
+      throw new Error("You need a little devnet SOL for a one-time profile");
+    }
+  }
+
+  const tx = new Transaction();
+  if (!info) {
+    tx.add(await session.program.methods.initPlayer(sessionKey.publicKey)
+      .accountsPartial({ player, wallet }).instruction());
+  }
+  tx.add(await session.program.methods.delegatePlayer()
+    .accountsPartial({ payer: wallet, wallet, pda: player, validator: TEE_VALIDATOR }).instruction());
+  const signature = await sendWalletTransaction(tx, base);
+  const confirmation = await base.confirmTransaction(signature, "confirmed");
+  if (confirmation.value.err) throw new Error("The wallet profile transaction failed to confirm");
+  return signature;
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState("");
+  const [walletNotice, setWalletNotice] = useState("");
+  const [walletBusy, setWalletBusy] = useState(false);
+  const wallet = useWallet();
+  const { setVisible } = useWalletModal();
+  const sessionRef = useRef<Session | null>(null);
+  const setActiveSession = useCallback((next: Session) => {
+    sessionRef.current = next;
+    setSession(next);
+  }, []);
   const [open, setOpenState] = useState<number | null>(() => {
     const n = Number(location.hash.slice(1)) - 1;
     return location.hash.length > 1 && n >= 0 && n < TABLES ? n : null;
@@ -22,8 +105,54 @@ export default function App() {
   const [lat, setLat] = useState<number[]>([]);
 
   useEffect(() => {
-    openSession(guestKey()).then(setSession).catch((e) => setError(String(e?.message ?? e)));
-  }, []);
+    let live = true;
+    openSession(guestKey()).then((next) => {
+      if (live) setActiveSession(next);
+    }).catch((e) => {
+      if (live) setError(String(e?.message ?? e));
+    });
+    return () => { live = false; };
+  }, [setActiveSession]);
+
+  useEffect(() => {
+    let live = true;
+    if (open !== null) return () => { live = false; };
+    if (!wallet.publicKey) {
+      if (sessionRef.current?.player) {
+        openSession(guestKey()).then((next) => { if (live) setActiveSession(next); }).catch(() => {});
+      }
+      return () => { live = false; };
+    }
+    setWalletNotice("");
+    setWalletBusy(true);
+    (async () => {
+      try {
+        const kp = await walletSessionKey(wallet.publicKey!, wallet.signMessage);
+        if (!live) return;
+        const next = await openSession(kp, wallet.publicKey!);
+        const signature = await prepareWalletProfile(wallet.publicKey!, kp, next, wallet.sendTransaction);
+        if (!live) return;
+        if (signature) console.info("Wallet profile transaction confirmed", signature);
+        setActiveSession(next);
+      } catch (e) {
+        if (!live) return;
+        const message = String((e as any)?.message ?? e);
+        setWalletNotice(message);
+        openSession(guestKey()).then((next) => { if (live) setActiveSession(next); }).catch(() => {});
+      } finally {
+        if (live) setWalletBusy(false);
+      }
+    })();
+    return () => { live = false; };
+  }, [open, wallet.publicKey, wallet.signMessage, wallet.sendTransaction, setActiveSession]);
+
+  const onWalletClick = () => {
+    if (wallet.publicKey) {
+      wallet.disconnect().catch((e) => setWalletNotice(String((e as any)?.message ?? e)));
+    } else {
+      setVisible(true);
+    }
+  };
   const median = useMemo(() => (lat.length ? [...lat].sort((a, b) => a - b)[lat.length >> 1] : null), [lat]);
 
   if (error) return (
@@ -50,7 +179,15 @@ export default function App() {
   return (
     <div className="app">
       {open === null
-        ? <Lobby session={session} onOpen={(i) => setOpen(i, false)} onPlay={(i) => setOpen(i, true)} />
+        ? <Lobby
+            session={session}
+            onOpen={(i) => setOpen(i, false)}
+            onPlay={(i) => setOpen(i, true)}
+            walletConnected={!!wallet.publicKey}
+            walletBusy={walletBusy}
+            walletNotice={walletNotice}
+            onWalletClick={onWalletClick}
+          />
         : <TableView key={open} session={session} index={open} autoSit={autoSit} median={median} onLeave={() => setOpen(null, false)} onLatency={(ms) => setLat((l) => [...l.slice(-19), ms])} />}
     </div>
   );
@@ -67,7 +204,15 @@ function status(t: Table, now: number): Status {
 }
 const joinable = (t: Table | null | undefined) => !!t && (t.phase === 0 || t.phase === 3) && t.seats.some((s) => s.player.equals(ZERO));
 
-function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: number) => void; onPlay: (i: number) => void }) {
+function Lobby({ session, onOpen, onPlay, walletConnected, walletBusy, walletNotice, onWalletClick }: {
+  session: Session;
+  onOpen: (i: number) => void;
+  onPlay: (i: number) => void;
+  walletConnected: boolean;
+  walletBusy: boolean;
+  walletNotice: string;
+  onWalletClick: () => void;
+}) {
   const [tables, setTables] = useState<(Table | null)[]>([]);
   const [now, setNow] = useState(Date.now() / 1000);
   const [copied, setCopied] = useState<number | null>(null);
@@ -128,8 +273,16 @@ function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: numb
       <header className="lobby-top">
         <div className="brand"><Logo size={30} /><span className="wordmark">Tipoff</span></div>
         <span className="grow" />
-        <span className="pill" title="A key made in this browser signs your moves. No wallet, no fees."><i className="dot on" />Guest {short(session.kp.publicKey)}</span>
+        <span className="pill" title="A key made in this browser signs your moves. No wallet, no fees."><i className="dot on" />{session.player ? "Wallet" : "Guest"} {short(session.id)}</span>
+        <button className="wallet-connect" type="button" title={WALLET_TITLE} disabled={walletBusy} onClick={onWalletClick}>
+          <span className="wallet-label-wide">{walletBusy ? "Connecting…" : walletConnected ? "Disconnect" : "Connect wallet"}</span>
+          <span className="wallet-label-short">{walletBusy ? "…" : walletConnected ? "Disconnect" : "Connect"}</span>
+        </button>
       </header>
+      {walletNotice && <p className="wallet-notice" role="status">
+        {walletNotice}
+        {walletNotice.startsWith("You need a little devnet SOL") && <> <a href="https://faucet.solana.com" target="_blank" rel="noreferrer">Solana faucet</a></>}
+      </p>}
 
       <section className="pitch">
         <h1>Someone on this floor already knows the news.</h1>
@@ -195,6 +348,13 @@ function Lobby({ session, onOpen, onPlay }: { session: Session; onOpen: (i: numb
               </div>
             );
           })}
+          <div className="room room-locked" aria-disabled="true">
+            <span className="room-no" aria-hidden="true"><Icon name="lock" size={24} /></span>
+            <span className="room-main">
+              <span className="room-head"><b>SOL tables</b><span className="room-badge">Coming with mainnet</span></span>
+              <span className="room-description">Ante SOL, and the pot pays out on-chain at settlement.</span>
+            </span>
+          </div>
         </div>
         <p className="fineprint">Play chips only, no real money. Runs on Solana devnet inside a MagicBlock private rollup. Program <a href={explorer("address", PID.toBase58())} target="_blank" rel="noreferrer">{short(PID)}</a></p>
       </section>

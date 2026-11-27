@@ -42,7 +42,7 @@ export function Leaderboard({ session }: { session: Session }) {
     return () => { live = false; clearInterval(id); };
   }, [session]);
 
-  const me = session.kp.publicKey;
+  const me = session.id;
   const sorted: BoardEntry[] = board
     ? board.entries
         .filter((e) => !e.player.equals(ZERO))
