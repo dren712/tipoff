@@ -546,6 +546,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     scene.current.set({
       stage: st, me: mySeat, insiderMe: !!insider, insider: t.insider, caught: t.caught, canVote: accusing && mySeat >= 0 && canVote && !busy && !locked,
       accused: myVote ?? undefined, allIn: myVote !== null ? myAllIn : undefined, scores,
+      votes: done && sCur && sCur.round === round ? sCur.seats.map((s) => s.suspect) : undefined,
       seats: t.seats.map((s) => ({ empty: s.player.equals(ZERO), pos: s.pos, mood: phase === 2 ? Math.sign(Math.round(equity(s, price, openPrice))) : 0 })),
       wall: {
         price, open: phase >= 2 ? openPrice : 0, elapsed, round: Number(round), points: hist.current.points, marks: hist.current.marks,

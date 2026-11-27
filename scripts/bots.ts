@@ -1,7 +1,7 @@
 // Pure bot decision logic (no RPC, no wall clock, no global randomness).
 import { CONVICTION, ROUND_SECS, SEATS } from "./lib.js";
 
-export type TraderStyle = "follower" | "skeptic" | "momentum" | "holder" | "scalper";
+export type TraderStyle = "follower" | "skeptic" | "momentum" | "holder" | "scalper" | "gambler";
 export const TRADER_STYLES: readonly TraderStyle[] = ["follower", "skeptic", "momentum", "holder", "scalper"];
 
 export type ShockView = { at: number; bps: number };
@@ -27,10 +27,14 @@ export type BotRoundState = {
   preLead: number[];
   actedPre: boolean[];
   playFalse: boolean[];
+  skipShock: number;
   // Non-insider reaction tracking
   rumourHandled: boolean[];
   rumourDelay: number[];
   rumourPlay: boolean[];
+  gamblerPlay: boolean[];
+  gamblerDelay: number[];
+  gamblerRumourSeenAt: (number | null)[];
   shockHandled: boolean[];
   seenRumours: number[];
   holderOpened: boolean;
@@ -54,20 +58,38 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-export function shuffleStyles(rng: () => number, count = SEATS): TraderStyle[] {
-  const pool: TraderStyle[] = [...TRADER_STYLES];
-  while (pool.length < count) {
-    pool.push(TRADER_STYLES[Math.floor(rng() * TRADER_STYLES.length)]);
-  }
-  for (let i = pool.length - 1; i > 0; i--) {
+export function shuffleStyles(rng: () => number, count = SEATS, excludeSeat?: number): TraderStyle[] {
+  const regulars: TraderStyle[] = [...TRADER_STYLES];
+  for (let i = regulars.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
+    [regulars[i], regulars[j]] = [regulars[j], regulars[i]];
+  }
+  const pool: TraderStyle[] = [];
+  for (let i = 0; i < count; i++) {
+    pool.push(regulars[i % regulars.length]);
+  }
+  const eligible: number[] = [];
+  for (let i = 0; i < count; i++) {
+    if (i !== excludeSeat) eligible.push(i);
+  }
+  if (eligible.length > 0) {
+    const gamblerSeat = eligible[Math.floor(rng() * eligible.length)];
+    pool[gamblerSeat] = "gambler";
   }
   return pool;
 }
 
 export function initBotRound(seat: number, style: TraderStyle, rng: () => number): BotRoundState {
   const randInt = (lo: number, hi: number) => lo + Math.floor(rng() * (hi - lo + 1));
+  const idxs = [0, 1, 2, 3];
+  for (let i = idxs.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [idxs[i], idxs[j]] = [idxs[j], idxs[i]];
+  }
+  const gamblerPlay = [false, false, false, false];
+  gamblerPlay[idxs[0]] = true;
+  gamblerPlay[idxs[1]] = true;
+  const skipShock = rng() < 0.35 ? Math.floor(rng() * 4) : -1;
   return {
     seat,
     style,
@@ -79,11 +101,15 @@ export function initBotRound(seat: number, style: TraderStyle, rng: () => number
     preLead: Array.from({ length: 4 }, () => 2 + rng() * 4),
     actedPre: [false, false, false, false],
     playFalse: Array.from({ length: 4 }, () => rng() < 0.6),
+    skipShock,
     rumourHandled: [false, false, false, false],
     rumourDelay: Array.from({ length: 4 }, () => 1 + rng() * 2),
     rumourPlay: Array.from({ length: 4 }, () =>
       style === "follower" ? rng() < 0.8 : style === "skeptic" ? rng() < 0.6 : false,
     ),
+    gamblerPlay,
+    gamblerDelay: Array.from({ length: 4 }, () => 0.5 + rng() * 1.5),
+    gamblerRumourSeenAt: [null, null, null, null],
     shockHandled: [false, false, false, false],
     seenRumours: [0, 0, 0, 0],
     holderOpened: false,
@@ -121,7 +147,10 @@ export function toTableView(s: any, zeroKey: { equals(other: any): boolean }): T
 export function observeTable(state: BotRoundState, table: TableView, elapsed: number): void {
   for (let i = 0; i < table.shocks.length; i++) {
     const sh = table.shocks[i];
-    if (isRumour(sh)) state.seenRumours[i] = Math.sign(sh.bps);
+    if (isRumour(sh)) {
+      state.seenRumours[i] = Math.sign(sh.bps);
+      if (state.gamblerRumourSeenAt[i] === null) state.gamblerRumourSeenAt[i] = elapsed;
+    }
   }
   state.priceHist.push({ t: elapsed, p: table.price });
   while (state.priceHist.length > 0 && elapsed - state.priceHist[0].t > 12) {
@@ -157,6 +186,7 @@ export function decideTrade(
       if (state.actedPre[i]) continue;
       if (elapsed >= sh.at - state.preLead[i] && elapsed < sh.at) {
         state.actedPre[i] = true;
+        if (i === state.skipShock) return 0;
         const pub = table.shocks[i];
         const isFalseRumour = pub && isRumour(pub) && Math.sign(pub.bps) !== Math.sign(sh.bps);
         if (isFalseRumour && !state.playFalse[i]) return 0;
@@ -169,7 +199,22 @@ export function decideTrade(
 
   // Non-insider styles.
   let delta = 0;
-  if (state.style === "follower" || state.style === "skeptic") {
+  if (state.style === "gambler") {
+    for (let i = 0; i < table.shocks.length; i++) {
+      const sh = table.shocks[i];
+      if (!state.gamblerPlay[i] || state.rumourHandled[i] || !isRumour(sh)) continue;
+      const seenAt = state.gamblerRumourSeenAt[i];
+      if (seenAt === null) continue;
+      const since = elapsed - seenAt;
+      if (since >= state.gamblerDelay[i] && since <= 2 && elapsed < sh.at) {
+        state.rumourHandled[i] = true;
+        const lots = 1 + Math.floor(rng() * 2);
+        const dir = rng() < 0.5 ? 1 : -1;
+        delta = clampDelta(seat.pos, dir * lots, 5);
+        break;
+      }
+    }
+  } else if (state.style === "follower" || state.style === "skeptic") {
     for (let i = 0; i < table.shocks.length; i++) {
       const sh = table.shocks[i];
       if (state.rumourHandled[i] || !isRumour(sh)) continue;
@@ -227,7 +272,7 @@ export function decideTrade(
       delta = clampDelta(seat.pos, rng() < 0.5 ? 1 : -1, 5);
     }
   }
-  if (delta === 0 && seat.trades === 0 && elapsed >= state.openProbeAt) {
+  if (delta === 0 && state.style !== "gambler" && seat.trades === 0 && elapsed >= state.openProbeAt) {
     return clampDelta(seat.pos, rng() < 0.5 ? 1 : -1, 5);
   }
   return delta;

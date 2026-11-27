@@ -52,7 +52,13 @@ for (let r = 0; r < ROUNDS; r++) {
     shocks: Array.from({ length: 4 }, () => ({ at: 0, bps: 0 })),
   };
 
-  const styles = shuffleStyles(rng, SEATS);
+  const styles = shuffleStyles(rng, SEATS, draw.insider);
+  assert.strictEqual(
+    styles.filter((s) => s === "gambler").length,
+    1,
+    `expected exactly 1 gambler per round, got ${styles.join(",")}`,
+  );
+  assert.notStrictEqual(styles[draw.insider], "gambler", "insider must never be assigned gambler style");
   const states: BotRoundState[] = Array.from({ length: SEATS }, (_, i) => initBotRound(i, styles[i], rng));
   const votes: Array<number | null> = Array(SEATS).fill(null);
   let shockBps = 0;
@@ -146,5 +152,61 @@ assert.strictEqual(vEnabled, 3 + CONVICTION);
 const stNoAllIn = initBotRound(0, "follower", () => 0.9);
 const vDisabled = decideVote(clearTable, stNoAllIn, 72, () => 0.9, false);
 assert.strictEqual(vDisabled, 3);
+
+// (a) Verify shuffleStyles always assigns exactly one gambler and never the excluded insider seat.
+for (let k = 0; k < 200; k++) {
+  const ins = k % SEATS;
+  const st = shuffleStyles(mulberry32(k + 1), SEATS, ins);
+  assert.strictEqual(st.filter((s) => s === "gambler").length, 1);
+  assert.notStrictEqual(st[ins], "gambler");
+}
+
+// (b) Gambler only trades 0.5-2 s after a rumour is visible and never reads hidden insider plans.
+{
+  // Try deterministic seeds; verify across seeds that gambler plays 2 of 4 rumours, 0 trades without visible rumour,
+  // and only within [0.5, 2.0]s after a rumour becomes visible, with identical trace despite flipped future shocks.
+  let seenGamblerTrades = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    const runTrace = (flipHiddenShocks: boolean) => {
+      const r1 = mulberry32(seed);
+      const rTrade = mulberry32(seed + 100);
+      const st = initBotRound(0, "gambler", r1);
+      const tbl: TableView = {
+        price: 150_00000000,
+        openPrice: 150_00000000,
+        seats: Array.from({ length: SEATS }, () => ({ pos: 0, trades: 0, empty: false })),
+        tape: [],
+        shocks: Array.from({ length: 4 }, () => ({ at: 0, bps: 0 })),
+      };
+      const shockTimes = [12, 24, 38, 52];
+      const trades: { t: number; delta: number }[] = [];
+      for (let t = 0; t < 60; t++) {
+        for (let i = 0; i < 4; i++) {
+          const at = shockTimes[i];
+          const realDir = (i % 2 === 0 ? 1 : -1) * (flipHiddenShocks ? -1 : 1);
+          if (t >= at) tbl.shocks[i] = { at, bps: realDir * 200 };
+          else if (t >= at - 5) tbl.shocks[i] = { at, bps: 1 }; // visible rumour (+1)
+        }
+        // Always pass insiderPlan = null for gambler (bots never get plan; real shock size only visible after at).
+        const delta = decideTrade(tbl, st, null, t, rTrade);
+        if (delta !== 0) {
+          assert.ok(Math.abs(delta) >= 1 && Math.abs(delta) <= 2, `gambler lot size ${delta} outside 1..2`);
+          const matchingIdx = shockTimes.findIndex((at) => t >= at - 5 + 0.5 && t <= at - 5 + 2.0);
+          assert.notStrictEqual(matchingIdx, -1, `gambler traded at t=${t}, outside 0.5-2s rumour window`);
+          tbl.seats[0].pos += delta;
+          tbl.seats[0].trades += 1;
+          trades.push({ t, delta });
+        }
+      }
+      return trades;
+    };
+    const traceA = runTrace(false);
+    const traceB = runTrace(true);
+    assert.deepStrictEqual(traceA, traceB, "gambler behavior changed when hidden future shocks flipped");
+    assert.strictEqual(traceA.length, 2, `expected 2 rumour trades per round for gambler, got ${traceA.length}`);
+    seenGamblerTrades += traceA.length;
+  }
+  assert.strictEqual(seenGamblerTrades, 40);
+}
 
 console.log("ALL BOT SIMULATION CHECKS PASSED");
