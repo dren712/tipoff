@@ -1606,14 +1606,14 @@ export class Scene3D {
       const portraitVote = portrait && stage === "vote";
       const portraitDrum = portrait && stage === "drum";
       fov = portraitVote ? 55 : portraitDrum ? 56 : 52;
-      const minDz = (portrait ? 8.0 : 6.3) / (Math.tan((fov * Math.PI) / 360) * aspect);
+      const minDz = (portrait ? 7.65 : 6.3) / (Math.tan((fov * Math.PI) / 360) * aspect);
       const dolly = stage === "vote" ? Math.sin((t - this.stageAt) * 0.28) * 1.6 : 0;
       const focus = this.hot >= 0 ? laneX(this.hot) * 0.35 : dolly * 0.65;
       const targetZ = 6.6;
       this.camPos.set(focus, portraitVote ? 1.4 : portraitDrum ? 1 : 2.65, 7.2 + Math.max(9.6, minDz));
       this.camLook.set(
         dolly * 0.35 + (this.hot >= 0 ? laneX(this.hot) * 0.15 : 0),
-        portraitVote ? 9.5 : portraitDrum ? 14.1 : 2.1,
+        portraitVote ? 9.3 : portraitDrum ? 14.1 : 2.1,
         targetZ,
       );
     } else if (stage === "reveal" && this.bots[v!.insider]) {
