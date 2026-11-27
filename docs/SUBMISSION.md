@@ -41,7 +41,7 @@ Settlement reveals the insider, shocks and votes, and publishes the salt so anyo
 
 ## Form checklist
 
-- **Website:** https://dren712.github.io/tipoff/
+- **Website:** https://tipoff-lake.vercel.app (mirror: https://dren712.github.io/tipoff/)
 - **GitHub:** https://github.com/dren712/tipoff
 - **Demo video:** VIDEO_URL_HERE
 - **Program (devnet):** [`BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet)

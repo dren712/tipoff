@@ -15,9 +15,9 @@ Record at 1920x1080 in Chrome on a machine with a graphics card, sound on. Hide 
 | 2:25–2:50 | Mid-round, open **Try to cheat**. Click **Read the secret**, **Read another seat**, **Trade as someone else**: each fails. | "Here's why it needs MagicBlock. On a normal chain, anyone could read the insider straight from the account data. Inside the private rollup, the secret has nobody on its read list. Not other players, not even me, the operator." |
 | 2:50–3:05 | After settlement, **Verify the draw**: the browser recomputes the insider and shocks and shows a match. | "When the round ends, the salt is published, so anyone can recheck that the draw was fair." |
 | 3:05–3:18 | Terminal: `npm run attack`, scrolling to `11/11 attacks rejected`. Then Solana Explorer on the program and season board. | "We ran eleven cheats against the live devnet tables. All eleven were rejected. And the results are committed back to Solana for anyone to inspect." |
-| 3:18–3:30 | End card over the lobby: play link, repo link. | "Tipoff. Find the insider. Play free at dren712.github.io/tipoff." |
+| 3:18–3:30 | End card over the lobby: play link, repo link. | "Tipoff. Find the insider. Play free at tipoff-lake.vercel.app." |
 
-On-screen captions (optional, one per shot): *No wallet, no fees* · *1 of 6 is the insider* · *~0.5 s per trade* · *Rumours: right 2 in 3* · *15 s sealed vote* · *Caught or got away* · *0 readers on the secret* · *Verify the draw* · *11/11 cheats rejected* · *dren712.github.io/tipoff*
+On-screen captions (optional, one per shot): *No wallet, no fees* · *1 of 6 is the insider* · *~0.5 s per trade* · *Rumours: right 2 in 3* · *15 s sealed vote* · *Caught or got away* · *0 readers on the secret* · *Verify the draw* · *11/11 cheats rejected* · *tipoff-lake.vercel.app*
 
 ## Clips to record
 
