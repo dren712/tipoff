@@ -64,10 +64,3 @@ All audio files have been converted from CC0 source packs to optimized game-read
 | `jingle_caught.ogg` | jingleSounds_Kenney | `OGG/jingles_HIT/jingles_HIT00.ogg` | CC0 | 0.28 | Selected jingles_HIT00.ogg |
 | `jingle_escaped.ogg` | jingleSounds_Kenney | `OGG/jingles_SAX/jingles_SAX00.ogg` | CC0 | 0.39 | Selected jingles_SAX00.ogg |
 | `music.mp3` | Cyberpunk Moonlight Sonata v2 | `Cyberpunk Moonlight Sonata v2.mp3` | CC0 | 116.74 | None |
-
-## Substitutions
-
-No substitutions were required for the requested named audio files, as all target files were found with exact matches in the source packs.
-For the jingle categories where a choice was permitted:
-- `jingle_caught.ogg`: Selected `OGG/jingles_HIT/jingles_HIT00.ogg` from `jingleSounds_Kenney`
-- `jingle_escaped.ogg`: Selected `OGG/jingles_SAX/jingles_SAX00.ogg` from `jingleSounds_Kenney`

@@ -23,9 +23,9 @@ Built for Solana Blitz v10.
 1. **Sit down.** You get a seat at a six-player table straight from the browser. Empty seats are filled by bots, so a round starts within seconds.
 2. **One of you is the insider.** MagicBlock's verifiable randomness picks one player and four news shocks inside the private rollup. Only the insider is told when the shocks land and which way they go.
 3. **Trade for 60 seconds.** Everyone trades the same price, which follows the live SOL/USD price at 12x. Tap Buy or Sell to go up to 5 lots long or short. Each trade confirms in about half a second, with no fees and no wallet pop-ups.
-4. **Watch for the tells.** Five seconds before each shock a public rumour names a direction. It is right two times in three, and only the insider knows which rumours are lies. The last two shocks are the biggest, and every trade appears on the public tape, so the insider has to profit without being obvious.
+4. **Watch for the tells.** Five seconds before each shock a public rumour names a direction. It is right two times in three, and only the insider knows which rumours are lies. As each shock lands, live tell badges light up on players who positioned right before the news. The last two shocks are the biggest, and every trade appears on the public tape, so the insider has to profit without being obvious.
 5. **Accuse.** When trading ends, you get 15 seconds to cast one sealed vote. The evidence cards show who traded just before each shock. Go all-in if you are sure.
-6. **The reveal.** Votes, the insider and the shocks are revealed together. A caught insider goes in the cage; an insider who escapes celebrates. Scores go to the season board on Solana.
+6. **The reveal.** Votes, the insider and the shocks are revealed together. Accusers rush the insider: if caught, the cage slams down; if they escape, they knock the crowd back and celebrate. A shock-by-shock **Case file** breaks down every tell afterwards, and results go to the season board on Solana.
 
 ### Scoring (play chips)
 
@@ -108,9 +108,12 @@ programs/tipoff/src/
 programs/tipoff/tests/
   invariants.rs statistical and property tests
 app/src/
-  App.tsx       lobby, season board, table list
-  Table.tsx     a table: trading, voting, reveal, results
-  Scene3D.ts    the 3D trading floor (Three.js)
+  App.tsx       lobby, wallet connect, season board, table list
+  Table.tsx     a table: trading, live tells, voting, reveal, results
+  Scene3D.ts    the 3D trading floor and showdown choreography (Three.js)
+  Evidence.tsx  live tell detection and pre-shock trade analysis
+  CaseFile.tsx  post-round shock-by-shock insider breakdown
+  Career.tsx    ranks, streaks, and on-chain career sync
   chain.ts      talking to the program and the rollup
 scripts/
   house.ts      round runner: bots, start, settle, commit
@@ -142,5 +145,10 @@ cd app && npm install && npm run dev
 ```
 
 Running your own tables (`npm run provision`, `npm run house`) needs a funded devnet key in `keys/deployer.json` or the `ADMIN_KEY` environment variable.
+
+## Deployment
+
+- **Frontend:** [playtipoff.vercel.app](https://playtipoff.vercel.app) (Vercel) with a mirror on [GitHub Pages](https://dren712.github.io/tipoff/) via [`.github/workflows/pages.yml`](.github/workflows/pages.yml).
+- **Round runner:** GitHub Actions ([`.github/workflows/house.yml`](.github/workflows/house.yml)) keeps the four public tables running 24/7.
 
 Built with Anchor 1.0.2, MagicBlock Ephemeral Rollups SDK 0.18.0, MagicBlock VRF, React, Three.js and Vite. Art and sound credits: [app/public/assets/CREDITS.md](app/public/assets/CREDITS.md).

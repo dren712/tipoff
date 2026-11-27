@@ -7,4 +7,4 @@ All 3D environment geometry, textures, normal maps, shaders, and jumbotron/vault
 - **Procedural gate chevron flow texture & vault padlock emblem** (`CanvasTexture`) — Source: procedural in `app/src/Scene3D.ts` — Licence: CC0 1.0 Universal
 - **Procedural arena tiers, instanced audience terminals, truss ring, moving-head beams, beveled Fresnel lane tiles, and jumbotron ticker** — Source: procedural `THREE` geometry/shaders in `app/src/Scene3D.ts` — Licence: CC0 1.0 Universal
 
-Total added external asset size: **0 KB** (budget: < 1.5 MB).
+Sound effects and music credits are listed in [sfx/README.md](sfx/README.md).
