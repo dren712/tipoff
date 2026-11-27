@@ -19,7 +19,7 @@ const url = (f: string) => `${import.meta.env.BASE_URL}assets/sfx/${f}`;
 // Per-sample gain normalization (measured in dBFS so every random variant hits the same loudness).
 const FOOT_GAINS = [0.22, 0.19, 0.28, 0.22, 0.37, 0.45, 0.27, 0.27, 0.15, 0.32];
 const STACK_GAINS = [0.50, 0.55, 0.56, 0.42, 0.54, 0.48];
-const MUSIC_VOL = 0.06;
+const MUSIC_VOL = 0.12;
 const PRELOAD = [
   "confirmation_001", "select_003", "error_004", "glitch_002", "bong_001",
   "lowFrequency_explosion_000", "lowFrequency_explosion_001", "impactMetal_002", "forceField_002", "doorOpen_001",
@@ -130,19 +130,39 @@ export function setMuted(m: boolean) {
   }
 }
 
-/// Starts the music loop and preloads sound effects. Retries on interaction until unlocked.
-export function startMusic() {
-  audio();
-  warm();
+function ensureMusic(): HTMLAudioElement | null {
+  if (typeof Audio === "undefined") return null;
   if (!music) {
     music = new Audio(url("music.mp3"));
+    music.preload = "auto";
     music.loop = true;
     music.volume = MUSIC_VOL;
     music.muted = muted;
   }
-  if (!muted && music.paused) {
-    void music.play().catch(() => {});
+  return music;
+}
+
+/// Starts the music loop immediately (before SFX preload) and preloads sound effects.
+export function startMusic(): Promise<boolean> {
+  audio();
+  const m = ensureMusic();
+  if (!m) return Promise.resolve(false);
+  if (muted) {
+    setTimeout(warm, 300);
+    return Promise.resolve(true);
   }
+  m.muted = false;
+  m.volume = MUSIC_VOL;
+  if (!m.paused) {
+    setTimeout(warm, 300);
+    return Promise.resolve(true);
+  }
+  return m.play()
+    .then(() => {
+      setTimeout(warm, 300);
+      return true;
+    })
+    .catch(() => false);
 }
 
 function drumSteps(): Step[] {
@@ -260,13 +280,18 @@ export const sfx = {
 };
 
 if (typeof window !== "undefined") {
-  const unlock = () => {
-    startMusic();
-    if (music && (muted || !music.paused)) {
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    }
+  // Preload music right away so playback starts without delay, and try autoplay immediately.
+  ensureMusic();
+  const detach = () => {
+    window.removeEventListener("pointerdown", unlock, true);
+    window.removeEventListener("keydown", unlock, true);
+    window.removeEventListener("click", unlock, true);
   };
-  window.addEventListener("pointerdown", unlock);
-  window.addEventListener("keydown", unlock);
+  const unlock = () => {
+    void startMusic().then((ok) => { if (ok) detach(); });
+  };
+  window.addEventListener("pointerdown", unlock, true);
+  window.addEventListener("keydown", unlock, true);
+  window.addEventListener("click", unlock, true);
+  void startMusic().then((ok) => { if (ok) detach(); });
 }
