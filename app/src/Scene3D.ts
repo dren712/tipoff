@@ -542,6 +542,8 @@ export class Scene3D {
   private view: View | null = null;
   private camPos = new THREE.Vector3(0, 8, 22);
   private camLook = new THREE.Vector3(0, 1, 0);
+  private liveFrameKey = "";
+  private liveLookY = 3.5;
   private look = new THREE.Vector3(0, 1, 0);
   private camFromPos = new THREE.Vector3(0, 8, 22);
   private camFromLook = new THREE.Vector3(0, 1, 0);
@@ -1542,12 +1544,60 @@ export class Scene3D {
         this.camPos.set(0, last ? 9.6 : 9.9, 23.2 + z * 0.4);
         this.camLook.set(0, 1.15, 0);
       } else {
-        const targetZ = -1.5;
-        const depth = (48.5 + z) * Math.min(1, 1.6 / aspect);
-        const scale = 1 - 0.5 * (1 - depth / (48.5 + z));
-        this.camPos.set(meX * 0.12, 3.5 + 5 * scale, targetZ + depth);
-        this.camLook.set(meX * 0.08, 3.5, -1.5);
+        const camZ = 47 + z, camY = 3.5, targetZ = -1.5;
         fov = last ? 22.2 : 22;
+        const game = this.host.closest(".game");
+        const tray = game?.querySelector<HTMLElement>(".tray");
+        const bar = game?.querySelector<HTMLElement>(".bar");
+        const width = this.host.clientWidth || window.innerWidth;
+        const height = this.host.clientHeight || window.innerHeight;
+        const hostTop = this.host.getBoundingClientRect().top;
+        const trayTop = tray?.getBoundingClientRect().top ?? hostTop + height - 140;
+        const barBottom = bar?.getBoundingClientRect().bottom ?? hostTop;
+        const key = `${width}:${height}:${trayTop}:${barBottom}:${last}`;
+        if (key !== this.liveFrameKey) {
+          this.liveFrameKey = key;
+          const tanHalfFov = Math.tan((fov * Math.PI) / 360);
+          const projectedY = (x: number, y: number, pointZ: number, lookY: number) => {
+            const fy0 = lookY - camY, fz0 = targetZ - camZ;
+            const fd = Math.hypot(fy0, fz0), fy = fy0 / fd, fz = fz0 / fd;
+            const dy = y - camY, dz = pointZ - camZ;
+            const depth = dy * fy + dz * fz;
+            const vertical = dy * -fz + dz * fy;
+            return hostTop + height / 2 - vertical * height / (2 * tanHalfFov * depth);
+          };
+          const bounds = (lookY: number) => {
+            const signYs = [];
+            const halfH = 0.9 * 0.85 / 2;
+            const halfD = Math.sin(Math.PI / 2.8) * halfH;
+            const halfY = Math.cos(Math.PI / 2.8) * halfH;
+            for (const y of [0.24 - halfY, 0.24 + halfY]) for (const pointZ of [9.48 - halfD, 9.48 + halfD]) {
+              signYs.push(projectedY(0, y, pointZ, lookY));
+            }
+            const edgeYs = [-6.45, 6.45].map((x) => projectedY(x, 0.045, 9.6, lookY));
+            const wallTop = [ -6.8, 6.8 ].flatMap((x) => [projectedY(x, 10.25, -12.6, lookY)]);
+            return { near: Math.max(...signYs, ...edgeYs), wall: Math.min(...wallTop) };
+          };
+          const nearLimit = trayTop - 24;
+          let low = -20, high = 3.5;
+          if (bounds(high).near <= nearLimit) low = high;
+          else for (let i = 0; i < 24; i++) {
+            const mid = (low + high) / 2;
+            if (bounds(mid).near <= nearLimit) low = mid; else high = mid;
+          }
+          const wallLimit = barBottom + 8;
+          if (bounds(low).wall < wallLimit) {
+            let lo = low, hi = 3.5;
+            for (let i = 0; i < 24; i++) {
+              const mid = (lo + hi) / 2;
+              if (bounds(mid).wall >= wallLimit) hi = mid; else lo = mid;
+            }
+            low = hi;
+          }
+          this.liveLookY = low;
+        }
+        this.camPos.set(meX * 0.12, camY, camZ);
+        this.camLook.set(meX * 0.08, this.liveLookY, targetZ);
       }
     } else if (stage === "deal" && me) {
       this.camPos.set(meX + 1.6, 2.3, -4.6 * a);
@@ -1555,15 +1605,15 @@ export class Scene3D {
     } else if (stage === "vote" || stage === "drum") {
       const portraitVote = portrait && stage === "vote";
       const portraitDrum = portrait && stage === "drum";
-      fov = portrait ? 70 : 52;
-      const minDz = (portrait ? 9.8 : 6.3) / (Math.tan((fov * Math.PI) / 360) * aspect);
+      fov = portraitVote ? 55 : portraitDrum ? 56 : 52;
+      const minDz = (portrait ? 8.0 : 6.3) / (Math.tan((fov * Math.PI) / 360) * aspect);
       const dolly = stage === "vote" ? Math.sin((t - this.stageAt) * 0.28) * 1.6 : 0;
       const focus = this.hot >= 0 ? laneX(this.hot) * 0.35 : dolly * 0.65;
-      const targetZ = portrait ? 5.8 : 6.6;
-      this.camPos.set(focus, portraitVote ? 4.1 : portraitDrum ? 4.9 : 2.65, targetZ + Math.max(9.6, minDz));
+      const targetZ = 6.6;
+      this.camPos.set(focus, portraitVote ? 1.4 : portraitDrum ? 1 : 2.65, 7.2 + Math.max(9.6, minDz));
       this.camLook.set(
         dolly * 0.35 + (this.hot >= 0 ? laneX(this.hot) * 0.15 : 0),
-        portraitVote ? 3.9 : portraitDrum ? 4.6 : 2.1,
+        portraitVote ? 9.5 : portraitDrum ? 14.1 : 2.1,
         targetZ,
       );
     } else if (stage === "reveal" && this.bots[v!.insider]) {
