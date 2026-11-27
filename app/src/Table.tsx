@@ -66,7 +66,7 @@ function buildSnap(t: Table, round: string, tableId: number, me: Session["kp"]["
     const allIn = vote >= conv && vote < conv + SEATS;
     return {
       seat: i,
-      name: SEAT_NAMES[i],
+      name: i === mySeat && getPlayerName() ? getPlayerName() : SEAT_NAMES[i],
       played,
       cashRaw,
       lastRaw,
@@ -180,6 +180,8 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
   const voteLock = useRef("");
   const sitAttempt = useRef({ count: 0, triedSeat: -1 });
   const autoSitting = useRef(false);
+  const customName = getPlayerName();
+  const nameOf = (seat: number, mine: number) => (seat === mine && customName ? customName : SEAT_NAMES[seat]);
   const me = session.id;
   const mySeatRef = useRef(-1);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -649,7 +651,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       const d = await redraw(t.revealedSalt);
       const same = d.insider === t.insider && d.shocks.every((s, i) => s.at === t.shocks[i].at && s.bps === t.shocks[i].bps);
       add({ ok: same, text: same
-        ? `Recomputed round ${round} in your browser from the revealed salt: insider ${SEAT_NAMES[d.insider]}, shocks ${d.shocks.map((s) => `${pct(s.bps)} at ${s.at}s`).join(", ")}. It matches what the program settled.`
+        ? `Recomputed round ${round} in your browser from the revealed salt: insider ${nameOf(d.insider, curSnap?.mySeat ?? mySeat)}, shocks ${d.shocks.map((s) => `${pct(s.bps)} at ${s.at}s`).join(", ")}. It matches what the program settled.`
         : "The recomputed draw does not match the settled round." });
     },
     ledger: async () => {
@@ -717,7 +719,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
               {votesFor(i) > 0 && <span className="votes"><Icon name="gavel" size={12} />{votesFor(i)}</span>}
               {empty ? (canSit ? <button className="sit" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, i))}>Sit here</button> : <span className="plate ghost">Open</span>) : (
                 <>
-                  <span className="plate"><b>{i === mySeat && getPlayerName() ? getPlayerName() : SEAT_NAMES[i]}</b>{i === mySeat && <em>You</em>}</span>
+                  <span className="plate"><b>{nameOf(i, mySeat)}</b>{i === mySeat && <em>You</em>}</span>
                   {tells >= 1 && <span className={`tag-tell ${tells >= 2 ? "hot" : ""}`}><Icon name="eye" size={11} />{tellText}</span>}
                   {trading && <span className={`tag-pnl num ${eq[i] >= 0 ? "up" : "down"}`}>{chips(eq[i])}</span>}
                   {accusing && myVote === i && <span className="tag-mark"><Icon name="gavel" size={12} />Accused</span>}
@@ -794,7 +796,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         {ui === "reveal" && curSnap && (
           <div className={`headline verdict ${curSnap.caught ? "caught" : "escaped"}`} style={{ ["--c" as any]: SEAT_COLORS[curSnap.insider] }}>
             <span className="kicker">The insider was</span>
-            <h2 className="culprit">{SEAT_NAMES[curSnap.insider]}{curSnap.insider === curSnap.mySeat && <em>that's you</em>}</h2>
+            <h2 className="culprit">{nameOf(curSnap.insider, curSnap.mySeat)}{curSnap.insider === curSnap.mySeat && <em>that's you</em>}</h2>
             <div className="stamp">{curSnap.caught ? "Caught" : "Got away"}</div>
             {stage === 2 && <p>{verdictLine(curSnap)}</p>}
           </div>
@@ -848,7 +850,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         <div className="feed-strip">{priceBox}{seat && phase === 2 && <span className={`mine num ${myEq >= 0 ? "up" : "down"}`}>{chips(myEq)} chips</span>}</div>
         {(ui === "live" || ui === "vote") && feed.map((m, k) => (
           <div key={hist.current.marks.length - k} className={`kill ${m.delta > 0 ? "up" : "down"} ${m.seat === mySeat ? "me" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[m.seat] }}>
-            <Avatar seat={m.seat} size={20} /><span className="who">{SEAT_NAMES[m.seat]}</span>
+            <Avatar seat={m.seat} size={20} /><span className="who">{nameOf(m.seat, mySeat)}</span>
             <b>{m.delta > 0 ? "BUY" : "SELL"} {Math.abs(m.delta)}</b><span className="at num">{m.t}s</span>
           </div>
         ))}
@@ -908,7 +910,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
 
         {(ui === "idle" || ui === "deal") && (
           <div className="waitbox">
-            {mySeat >= 0 || wantSit ? <><span className="spinner" /><span>{mySeat >= 0 && <><b>You are in as {SEAT_NAMES[mySeat]}.</b> </>}<span className="state-line">{waitState}</span></span></>
+            {mySeat >= 0 || wantSit ? <><span className="spinner" /><span>{mySeat >= 0 && <><b>You are in as {nameOf(mySeat, mySeat)}.</b> </>}<span className="state-line">{waitState}</span></span></>
               : canSit && firstOpen >= 0 ? <>
                 <button className="btn gold big" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, firstOpen))}><Icon name="seat" size={22} />Take a seat</button>
                 <span className="muted">or pick a desk on the floor</span>
@@ -923,7 +925,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
             marks={hist.current.marks}
             shocks={t.shocks}
             rumours={hist.current.rumours}
-            seatNames={SEAT_NAMES}
+            seatNames={SEAT_NAMES.map((_, i) => nameOf(i, mySeat))}
             seatColors={SEAT_COLORS}
             voting={ui === "vote"}
             mySeat={mySeat}
@@ -967,7 +969,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
                 marks={hist.current.marks}
                 shocks={t.shocks}
                 rumours={hist.current.rumours}
-                names={SEAT_NAMES}
+                names={SEAT_NAMES.map((_, i) => nameOf(i, curSnap.mySeat))}
                 colors={SEAT_COLORS}
               />
             )}
@@ -976,10 +978,10 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
                 <div key={s.seat} className={`suspect score ${s.seat === curSnap.insider ? "insider" : ""} ${s.seat === curSnap.mySeat ? "self" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[s.seat] }}>
                   <span className="s-rank">{rank + 1}</span>
                   <Avatar seat={s.seat} size={38} masked={s.seat === curSnap.insider} />
-                  <span className="s-name">{s.seat === curSnap.mySeat && getPlayerName() ? getPlayerName() : s.name}{s.seat === curSnap.mySeat && <em>You</em>}</span>
+                  <span className="s-name">{nameOf(s.seat, curSnap.mySeat)}{s.seat === curSnap.mySeat && <em>You</em>}</span>
                   <span className={`s-pnl num ${Math.round(s.last) > 0 ? "up" : Math.round(s.last) < 0 ? "down" : ""}`}>{chips(s.last * scoreMul)}</span>
                   {s.votesGot > 0 && <span className="s-votes"><Icon name="gavel" size={12} />{s.votesGot}</span>}
-                  <span className="s-meta">{s.seat === curSnap.insider ? <b className="s-ins">Insider</b> : s.suspect !== NONE ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[s.suspect] }} />{SEAT_NAMES[s.suspect]}</> : "no vote"}</span>
+                  <span className="s-meta">{s.seat === curSnap.insider ? <b className="s-ins">Insider</b> : s.suspect !== NONE ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[s.suspect] }} />{nameOf(s.suspect, curSnap.mySeat)}</> : "no vote"}</span>
                   {rank === 0 && <span className="s-top">Top trader</span>}
                 </div>
               ))}
@@ -1007,7 +1009,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
                 {[...hist.current.marks].reverse().slice(0, 60).map((m, k) => (
                   <div key={hist.current.marks.length - k} className={`print ${m.delta > 0 ? "up" : "down"}`}>
                     <span className="at num">{m.t}s</span><Avatar seat={m.seat} size={20} />
-                    <span className="who">{SEAT_NAMES[m.seat]}</span>
+                    <span className="who">{nameOf(m.seat, mySeat)}</span>
                     <b>{m.delta > 0 ? "BUY" : "SELL"} {Math.abs(m.delta)}</b><span className="px num">${usd(m.p)}</span>
                   </div>
                 ))}
