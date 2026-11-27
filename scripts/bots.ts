@@ -36,6 +36,7 @@ export type BotRoundState = {
   holderOpened: boolean;
   holderDir: number;
   holderSize: number;
+  openProbeAt: number;
   lastMomentumAt: number;
   priceHist: { t: number; p: number }[];
 };
@@ -88,6 +89,7 @@ export function initBotRound(seat: number, style: TraderStyle, rng: () => number
     holderOpened: false,
     holderDir: rng() < 0.5 ? 1 : -1,
     holderSize: randInt(2, 4),
+    openProbeAt: 2 + rng() * 10,
     lastMomentumAt: -10,
     priceHist: [],
   };
@@ -166,6 +168,7 @@ export function decideTrade(
   }
 
   // Non-insider styles.
+  let delta = 0;
   if (state.style === "follower" || state.style === "skeptic") {
     for (let i = 0; i < table.shocks.length; i++) {
       const sh = table.shocks[i];
@@ -173,55 +176,61 @@ export function decideTrade(
       const rumourAt = sh.at - 5;
       if (elapsed >= rumourAt + state.rumourDelay[i] && elapsed < sh.at) {
         state.rumourHandled[i] = true;
-        if (!state.rumourPlay[i]) return 0;
+        if (!state.rumourPlay[i]) break;
         const lots = 1 + Math.floor(rng() * 3);
         const dir = state.style === "follower" ? Math.sign(sh.bps) : -Math.sign(sh.bps);
-        return clampDelta(seat.pos, dir * lots, 5);
+        delta = clampDelta(seat.pos, dir * lots, 5);
+        break;
       }
     }
-    return 0;
-  }
-
-  if (state.style === "momentum") {
-    if (elapsed - state.lastMomentumAt < 5) return 0;
-    const ref = [...state.priceHist].reverse().find((x) => elapsed - x.t >= 4.5);
-    if (!ref || ref.p <= 0) return 0;
-    const ret = (table.price - ref.p) / ref.p;
-    if (Math.abs(ret) > 0.003) {
-      state.lastMomentumAt = elapsed;
-      const lots = 1 + Math.floor(rng() * 2);
-      return clampDelta(seat.pos, Math.sign(ret) * lots, 5);
+  } else if (state.style === "momentum") {
+    if (elapsed - state.lastMomentumAt >= 5) {
+      const ref = [...state.priceHist].reverse().find((x) => elapsed - x.t >= 4.5);
+      if (ref && ref.p > 0) {
+        const ret = (table.price - ref.p) / ref.p;
+        if (Math.abs(ret) > 0.003) {
+          state.lastMomentumAt = elapsed;
+          const lots = 1 + Math.floor(rng() * 2);
+          delta = clampDelta(seat.pos, Math.sign(ret) * lots, 5);
+        }
+      }
     }
-    return 0;
-  }
-
-  if (state.style === "holder") {
+  } else if (state.style === "holder") {
     if (!state.holderOpened && elapsed >= 2 && seat.trades === 0) {
       state.holderOpened = true;
-      return clampDelta(seat.pos, state.holderDir * state.holderSize, 5);
-    }
-    for (let i = 0; i < table.shocks.length; i++) {
-      const sh = table.shocks[i];
-      if (!state.shockHandled[i] && isRealShock(sh) && elapsed >= sh.at) {
-        state.shockHandled[i] = true;
-        if (seat.pos !== 0) return clampDelta(seat.pos, -Math.sign(seat.pos), 5);
+      delta = clampDelta(seat.pos, state.holderDir * state.holderSize, 5);
+    } else {
+      for (let i = 0; i < table.shocks.length; i++) {
+        const sh = table.shocks[i];
+        if (!state.shockHandled[i] && isRealShock(sh) && elapsed >= sh.at) {
+          state.shockHandled[i] = true;
+          if (seat.pos !== 0) {
+            delta = clampDelta(seat.pos, -Math.sign(seat.pos), 5);
+            break;
+          }
+        }
       }
     }
-    return 0;
-  }
-
-  // Scalper: flattens within 4 s after each shock; takes an occasional small probe otherwise.
-  for (let i = 0; i < table.shocks.length; i++) {
-    const sh = table.shocks[i];
-    if (!state.shockHandled[i] && isRealShock(sh) && elapsed >= sh.at && elapsed <= sh.at + 4) {
-      state.shockHandled[i] = true;
-      if (seat.pos !== 0) return clampDelta(seat.pos, -seat.pos, 5);
+  } else {
+    // Scalper: flattens within 4 s after each shock; takes an occasional small probe otherwise.
+    for (let i = 0; i < table.shocks.length; i++) {
+      const sh = table.shocks[i];
+      if (!state.shockHandled[i] && isRealShock(sh) && elapsed >= sh.at && elapsed <= sh.at + 4) {
+        state.shockHandled[i] = true;
+        if (seat.pos !== 0) {
+          delta = clampDelta(seat.pos, -seat.pos, 5);
+          break;
+        }
+      }
+    }
+    if (delta === 0 && seat.pos === 0 && elapsed > 4 && elapsed < ROUND_SECS - 4 && rng() < 0.08) {
+      delta = clampDelta(seat.pos, rng() < 0.5 ? 1 : -1, 5);
     }
   }
-  if (seat.pos === 0 && elapsed > 4 && elapsed < ROUND_SECS - 4 && rng() < 0.08) {
+  if (delta === 0 && seat.trades === 0 && elapsed >= state.openProbeAt) {
     return clampDelta(seat.pos, rng() < 0.5 ? 1 : -1, 5);
   }
-  return 0;
+  return delta;
 }
 
 export function suspicionScores(

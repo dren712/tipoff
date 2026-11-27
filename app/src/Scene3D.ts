@@ -667,7 +667,7 @@ export class Scene3D {
       const m = new THREE.MeshStandardMaterial({ color: 0x070a14, emissive: hex, emissiveIntensity: 1.5, roughness: 0.4, metalness: 0.6 });
       if (near) this.shortGateMat = m; else this.longGateMat = m;
       const g = near ? this.nearGate : this.deck;
-      const ph = near ? 1.3 : 3.2;
+      const ph = near ? 0.72 : 3.2;
       const gateGeos: THREE.BufferGeometry[] = [];
       for (const x of [-6.15, 6.15]) {
         gateGeos.push(placed(new THREE.BoxGeometry(0.34, ph, 0.34), x, ph / 2, z));
@@ -680,13 +680,18 @@ export class Scene3D {
         archTrim.position.set(0, ph - 0.22, z);
         g.add(archTrim);
       } else {
-        for (const s of [-1, 1]) gateGeos.push(placed(new THREE.BoxGeometry(2.1, 0.24, 0.28), s * 5.2, ph, z));
+        for (const s of [-1, 1]) gateGeos.push(placed(new THREE.BoxGeometry(0.56, 0.16, 0.42), s * 6.15, ph, z));
         gateGeos.push(placed(new THREE.BoxGeometry(12.6, 0.09, 0.28), 0, 0.045, z));
       }
       g.add(new THREE.Mesh(mergeParts(gateGeos), m));
       const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.0, 0.9), label(text, "#" + new THREE.Color(hex).getHexString()));
-      if (near) sign.position.set(0, 2.05, z + 0.3);
-      else sign.position.set(0, 3.65, z);
+      if (near) {
+        sign.rotation.x = -Math.PI / 2.8;
+        sign.position.set(0, 0.24, 9.48);
+        sign.scale.setScalar(0.85);
+      } else {
+        sign.position.set(0, 3.65, z);
+      }
       g.add(sign);
 
       const runner = new THREE.Mesh(new THREE.PlaneGeometry(11.4, 7.2).rotateX(-Math.PI / 2), near ? this.shortChevMat : this.longChevMat);
@@ -797,7 +802,7 @@ export class Scene3D {
       for (let i = 0; i < count; i++) {
         // Keep columns out of the +Z front portrait camera tunnel.
         const frac = (i + 0.5) / count;
-        const a = -Math.PI * 0.78 + frac * Math.PI * 1.56;
+        const a = -Math.PI * 0.65 + frac * Math.PI * 1.3;
         const r = rMin + Math.random() * rSpan, h = hMin + Math.random() * hSpan;
         this.tmp.position.set(Math.sin(a) * r, -13 + h / 2, -Math.cos(a) * r);
         this.tmp.rotation.set(0, a, 0);
@@ -1537,20 +1542,20 @@ export class Scene3D {
         this.camPos.set(0, last ? 9.6 : 9.9, 23.2 + z * 0.4);
         this.camLook.set(0, 1.15, 0);
       } else {
-        this.camPos.set(meX * 0.12, 23.73, 50 + z);
-        this.camLook.set(meX * 0.08, 0.95, 0.4);
-        fov = last ? 19.6 : 19.4;
+        this.camPos.set(meX * 0.12, 12.8, 47 + z);
+        this.camLook.set(meX * 0.08, 3.5, -1.5);
+        fov = last ? 22.2 : 22;
       }
     } else if (stage === "deal" && me) {
       this.camPos.set(meX + 1.6, 2.3, -4.6 * a);
       this.camLook.set(meX, 1.4, 0);
     } else if (stage === "vote" || stage === "drum") {
-      fov = portrait ? 56 : 52;
-      const minDz = 6.3 / (Math.tan((fov * Math.PI) / 360) * aspect);
+      fov = portrait && stage === "vote" ? 55 : portrait ? 56 : 52;
+      const minDz = (portrait ? 6.8 : 6.3) / (Math.tan((fov * Math.PI) / 360) * aspect);
       const dolly = stage === "vote" ? Math.sin((t - this.stageAt) * 0.28) * 1.6 : 0;
       const focus = this.hot >= 0 ? laneX(this.hot) * 0.35 : dolly * 0.65;
-      this.camPos.set(focus, portrait ? 3.0 : 2.65, 7.2 + Math.max(9.6, minDz));
-      this.camLook.set(dolly * 0.35 + (this.hot >= 0 ? laneX(this.hot) * 0.15 : 0), portrait ? 2.2 : 2.1, 6.6);
+      this.camPos.set(focus, portrait ? (stage === "vote" ? 3.55 : 2.9) : 2.65, 7.2 + Math.max(9.6, minDz));
+      this.camLook.set(dolly * 0.35 + (this.hot >= 0 ? laneX(this.hot) * 0.15 : 0), portrait ? (stage === "vote" ? 3.35 : 2.45) : 2.1, 6.6);
     } else if (stage === "reveal" && this.bots[v!.insider]) {
       const p = this.bots[v!.insider].root.position;
       const el = t - this.stageAt;

@@ -3,12 +3,11 @@
 .stage-banners {
   position: absolute;
   z-index: 6;
-  left: 50%;
-  top: calc(106px + var(--safe-t));
-  transform: translateX(-50%);
-  width: min(560px, calc(100% - 32px));
+  left: calc(16px + var(--safe-l));
+  top: calc(116px + var(--safe-t));
+  width: min(370px, calc(100% - 32px));
   display: grid;
-  justify-items: center;
+  justify-items: start;
   gap: 8px;
   pointer-events: none;
 }
@@ -161,8 +160,11 @@
 
 @media (max-width: 820px) {
   .stage-banners {
+    left: 50%;
     top: 6px;
+    transform: translateX(-50%);
     width: calc(100% - 16px);
+    justify-items: center;
     gap: 5px;
   }
   .rumour {

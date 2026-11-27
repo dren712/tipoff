@@ -393,7 +393,18 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
     autoSitting.current = true;
     run(
       "Seated",
-      () => actions.sit(session, key, target),
+      async () => {
+        try {
+          return await actions.sit(session, key, target);
+        } catch (e: any) {
+          if (!/seat is taken|SeatTaken|\b6003\b|0x1773/i.test(String(e?.message ?? e))) throw e;
+          sitAttempt.current = { count: 1, triedSeat: target };
+          const fresh = await fetchTable(session, key).catch(() => null);
+          const next = fresh?.seats.findIndex((s, i) => i !== target && s.player.equals(ZERO)) ?? -1;
+          if (next < 0) throw e;
+          return actions.sit(session, key, next);
+        }
+      },
       () => {
         if (session.player) {
           setWantSit(false);
@@ -837,7 +848,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
       <footer className="tray">
         {ui === "live" && seat && (
           <>
-            {showCoach && <div className="coach" role="status">Watch who trades just before the news.</div>}
+            {showCoach && <div className="coach" role="status">{insider ? "Trade ahead of the news without being obvious." : "Watch who trades just before the news."}</div>}
             <div className="deck">
             <button
               className={`trade sell ${pressedBtn === "sell" ? "pressed" : ""}`}
