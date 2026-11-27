@@ -9,6 +9,7 @@ import { Icon, Logo } from "./Icon";
 import { Scene3D } from "./Scene3D";
 import { TableView } from "./Table";
 import { Leaderboard } from "./Leaderboard";
+import { isMuted, setMuted, startMusic } from "./sound";
 
 const WALLET_TITLE = "Optional. Your season record follows your wallet. Moves still need no pop-ups.";
 
@@ -202,6 +203,13 @@ function Lobby({ session, onOpen, onPlay, walletKey, walletConnected, walletBusy
   const [playerName, setNameState] = useState<string>(() => getPlayerName());
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [muted, setMute] = useState(() => isMuted());
+  const toggleSound = () => {
+    const next = !muted;
+    setMuted(next);
+    setMute(next);
+    if (!next) void startMusic();
+  };
   const startEditName = () => { setNameDraft(playerName); setEditingName(true); };
   const commitName = () => {
     const saved = setPlayerName(nameDraft);
@@ -290,6 +298,15 @@ function Lobby({ session, onOpen, onPlay, walletKey, walletConnected, walletBusy
             <span className="pill-pencil" aria-hidden="true">✎</span>
           </button>
         )}
+        <button
+          className="iconbtn"
+          type="button"
+          onClick={toggleSound}
+          aria-label={muted ? "Turn sound on" : "Turn sound off"}
+          title={muted ? "Sound is off" : "Sound is on"}
+        >
+          <Icon name={muted ? "mute" : "sound"} />
+        </button>
         <button className="wallet-connect" type="button" title={WALLET_TITLE} disabled={walletBusy} onClick={onWalletClick}>
           <span className="wallet-label-wide">{walletBusy ? "Connecting…" : walletConnected ? "Disconnect" : "Connect wallet"}</span>
           <span className="wallet-label-short">{walletBusy ? "…" : walletConnected ? "Disconnect" : "Connect"}</span>
