@@ -39,6 +39,16 @@ export function seatEvidence(
   });
 }
 
+/// Counts how many revealed shocks had a net pre-shock trade on the right side.
+export function tellCount(
+  marks: Mark[],
+  shocks: Shock[],
+  rumours: Record<number, number>,
+  seatIdx: number,
+): number {
+  return seatEvidence(marks, shocks, rumours, seatIdx).filter((x) => x.status === "right").length;
+}
+
 type Props = {
   seats: Seat[];
   eq: number[];

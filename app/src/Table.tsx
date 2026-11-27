@@ -7,10 +7,11 @@ import {
 } from "./chain";
 import { Chart } from "./Chart";
 import type { Point, Mark } from "./Chart";
-import { Evidence } from "./Evidence";
+import { Evidence, tellCount } from "./Evidence";
 import { Icon, Logo } from "./Icon";
 import { Avatar, SEAT_COLORS, SEAT_NAMES } from "./Avatar";
-import { Career, CareerRound } from "./Career";
+import { Career, CareerRound, nextGoal } from "./Career";
+import { CaseFile } from "./CaseFile";
 import { isMuted, setMuted, sfx } from "./sound";
 import { Scene3D, Stage } from "./Scene3D";
 import "./css/onboarding.css";
@@ -707,6 +708,8 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
         <div className="scrim" />
         {t.seats.map((s, i) => {
           const empty = s.player.equals(ZERO), pop = pops[i], last = s.last.toNumber() / 1e6;
+          const tells = !empty && (trading || accusing) ? tellCount(hist.current.marks, t.shocks, hist.current.rumours, i) : 0;
+          const tellText = insider && i === mySeat && tells >= 2 ? `Suspicious: ${tells} tells` : `${tells} ${tells === 1 ? "tell" : "tells"}`;
           return (
             <div key={i} className={`tag ${i === mySeat ? "me" : ""} ${empty ? "empty" : ""}`} ref={(el) => (tagRefs.current[i] = el)} style={{ ["--c" as any]: SEAT_COLORS[i] }}>
               {pop && trading && <span key={pop.id} className={`pop ${pop.delta > 0 ? "up" : "down"}`}><Icon name={pop.delta > 0 ? "up" : "down"} size={12} />{pop.delta > 0 ? "BUY" : "SELL"} {Math.abs(pop.delta)}</span>}
@@ -714,6 +717,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
               {empty ? (canSit ? <button className="sit" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, i))}>Sit here</button> : <span className="plate ghost">Open</span>) : (
                 <>
                   <span className="plate"><b>{SEAT_NAMES[i]}</b>{i === mySeat && <em>You</em>}</span>
+                  {tells >= 1 && <span className={`tag-tell ${tells >= 2 ? "hot" : ""}`}><Icon name="eye" size={11} />{tellText}</span>}
                   {trading && <span className={`tag-pnl num ${eq[i] >= 0 ? "up" : "down"}`}>{chips(eq[i])}</span>}
                   {accusing && myVote === i && <span className="tag-mark"><Icon name="gavel" size={12} />Accused</span>}
                   {settled && stage === 2 && <span className={`tag-pnl num big ${last >= 0 ? "up" : "down"}`}>{chips(last)}</span>}
@@ -779,7 +783,12 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
             <span className="rc-tap">Tap to dismiss</span>
           </button>
         )}
-        {ui === "vote" && <div className="headline"><h2>Who was the insider?</h2><p>{mySeat >= 0 ? (canVote ? (myVote !== null ? `You accused ${SEAT_NAMES[myVote]}. Votes stay sealed until the reveal.` : "Pick your suspect. Votes stay sealed until the reveal.") : "Votes are in. Opening the envelope.") : "The floor is voting in secret."}</p></div>}
+        {ui === "vote" && (() => {
+          const g = mySeat >= 0 && !insider ? nextGoal() : null;
+          const stake = g && g.catchesLeft === 1 && g.nextRank ? ` A right call makes you ${g.nextRank}.` : "";
+          const copy = mySeat >= 0 ? (canVote ? (myVote !== null ? `You accused ${SEAT_NAMES[myVote]}. Votes stay sealed until the reveal.` : "Pick your suspect. Votes stay sealed until the reveal.") : "Votes are in. Opening the envelope.") : "The floor is voting in secret.";
+          return <div className="headline"><h2>Who was the insider?</h2><p>{copy}{stake}</p></div>;
+        })()}
         {ui === "drum" && <div className="headline"><h2 className="pulse">The insider was</h2></div>}
         {ui === "reveal" && curSnap && (
           <div className={`headline verdict ${curSnap.caught ? "caught" : "escaped"}`} style={{ ["--c" as any]: SEAT_COLORS[curSnap.insider] }}>
@@ -951,6 +960,16 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
               </div>
               {careerRound && <Career session={session} round={careerRound} chips={chips} />}
             </div>
+            {hist.current.marks.length > 0 && (
+              <CaseFile
+                snap={curSnap}
+                marks={hist.current.marks}
+                shocks={t.shocks}
+                rumours={hist.current.rumours}
+                names={SEAT_NAMES}
+                colors={SEAT_COLORS}
+              />
+            )}
             <div className="suspects">
               {ranked.map((s, rank) => (
                 <div key={s.seat} className={`suspect score ${s.seat === curSnap.insider ? "insider" : ""} ${s.seat === curSnap.mySeat ? "self" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[s.seat] }}>
