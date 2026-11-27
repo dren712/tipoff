@@ -5,7 +5,7 @@ A 60-second trading game where one of six players secretly knows the news, and e
 It only works because the secret stays secret. On a normal blockchain anyone could read the insider and the news schedule straight from the account data. Tipoff runs its rounds inside a MagicBlock private rollup, where nobody can read them, not even the person running the tables.
 
 - **Play now, no wallet needed:** https://playtipoff.vercel.app (mirror: https://dren712.github.io/tipoff/ — connect Phantom or Solflare if you want your season record tied to your wallet)
-- **Demo video:** VIDEO_URL_HERE
+- **Demo video:** https://youtu.be/CnV17mPQORI
 - **Program on Solana devnet:** [`BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet)
 
 ![The live trading floor](docs/screens/desktop-live.png)

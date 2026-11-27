@@ -36,14 +36,14 @@ Settlement reveals the insider, shocks and votes, and publishes the salt so anyo
 
 - **Program:** Rust, Anchor 1.0.2, MagicBlock Ephemeral Rollups SDK 0.18.0, MagicBlock VRF SDK
 - **MagicBlock / Solana:** devnet, private Ephemeral Rollup (TEE), permissions, VRF, Magic Actions, SOL/USD oracle feed
-- **Web:** React 18, TypeScript, Three.js, Vite, hosted on GitHub Pages
+- **Web:** React 18, TypeScript, Three.js, Vite, hosted on Vercel (GitHub Pages mirror)
 - **Round runner and tests:** Node 20 scripts on GitHub Actions, Rust unit and property tests, a 2,000-round bot simulation, and a live devnet attack script
 
 ## Form checklist
 
 - **Website:** https://playtipoff.vercel.app (mirror: https://dren712.github.io/tipoff/)
 - **GitHub:** https://github.com/dren712/tipoff
-- **Demo video:** VIDEO_URL_HERE
+- **Demo video:** https://youtu.be/CnV17mPQORI
 - **Program (devnet):** [`BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M`](https://explorer.solana.com/address/BuxvayFhHgiWwvUtCofARcq9HcHzyvk5FPoGANsEw87M?cluster=devnet)
 - **Round ledger:** [`Dx1D48i2W3UTZpnJF1SxocVybbBDT73RjTVHycLvgcAu`](https://explorer.solana.com/address/Dx1D48i2W3UTZpnJF1SxocVybbBDT73RjTVHycLvgcAu?cluster=devnet)
 - **Season board:** [`5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d`](https://explorer.solana.com/address/5QKFsaj9mwMrejYFtHeBHN9LMTZhbLTM5bt8SwLuAX6d?cluster=devnet)
