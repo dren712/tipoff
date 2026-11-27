@@ -218,6 +218,14 @@ export const sfx = {
     { name: "jingle_caught", gain: 0.25, at: 0.28 },
     { name: "winner", gain: 0.3, at: 0.6 },
   ]),
+  clang: () => sequence([
+    { name: "impactMetal_002", gain: 0.56, at: 0, rate: 0.94 },
+    { name: "metalLatch", gain: 0.42, at: 0.06, rate: 1.05 },
+  ]),
+  knock: () => sequence([
+    { name: "lowFrequency_explosion_001", gain: 0.48, at: 0, rate: 1.15 },
+    { name: "phaserDown2", gain: 0.95, at: 0.06, rate: 1.25 },
+  ]),
   escaped: () => sequence([
     { name: "zapThreeToneDown", gain: 2.4, at: 0 },
     { name: "jingle_escaped", gain: 0.42, at: 0.35 },

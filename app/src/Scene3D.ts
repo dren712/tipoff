@@ -7,6 +7,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { sfx } from "./sound";
 
 export type Stage = "idle" | "deal" | "live" | "vote" | "drum" | "reveal";
 export type SeatView = { empty: boolean; pos: number; mood: number };
@@ -18,7 +19,7 @@ export type Wall = {
   future: { at: number; bps: number }[];
   title: string; sub: string;
 };
-export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boolean; insider: number; caught: boolean; canVote?: boolean; accused?: number; allIn?: boolean; scores?: number[]; wall: Wall };
+export type View = { stage: Stage; seats: SeatView[]; me: number; insiderMe: boolean; insider: number; caught: boolean; canVote?: boolean; accused?: number; allIn?: boolean; scores?: number[]; votes?: number[]; wall: Wall };
 
 const N = 6, TILE = 1.6, GREEN = 0x3ddc97, RED = 0xff5c6c, MAGENTA = 0xff3df0, GOLD = 0xf5b83d;
 const SEAT_NAMES = ["RUBY", "AMBER", "RUSTY", "JADE", "AZURE", "VIOLET"];
@@ -34,6 +35,13 @@ type Bot = {
   ring: THREE.Mesh; pulse: THREE.Mesh; spot: THREE.SpotLight; beam: THREE.Mesh;
   hold: boolean; holdEnd: boolean; moving: boolean; moveDist: number; lean: number; down: number; slump: number;
   yaw: number; trail: number; queue: string[]; dealDone: boolean; nervous: boolean; revealPending: boolean; nextGlance: number;
+  showRole?: "none" | "accuser" | "wrong" | "idle";
+  showPos?: THREE.Vector3;
+  showPush?: THREE.Vector3;
+  showPushStart?: THREE.Vector3;
+  showYaw?: number;
+  showSpeed?: number;
+  showArrived?: boolean;
 };
 type Coin = { p: THREE.Vector3; v: THREE.Vector3; life: number; src?: THREE.Vector3; dst?: THREE.Vector3; t?: number; dur?: number; delay?: number; arcH?: number; spark?: number };
 type Particle = { p: THREE.Vector3; v: THREE.Vector3; col: THREE.Color; life: number; maxLife: number; size: number; grav: number; drag: number; grow: number };
@@ -496,7 +504,18 @@ export class Scene3D {
   private laserFlare = 0;
   private cageVy = 0;
   private cageSlammed = false;
+  private cagePending = false;
   private payoutDone = false;
+  private showPhase: "idle" | "charge" | "knock" | "done" = "idle";
+  private showKnockAt = 0;
+  private showDanceDone = false;
+  private showStandDone = false;
+  private showInit = false;
+  private showLock = false;
+  private showAccusers: number[] = [];
+  private showCenterX = 0;
+  private showHalfX = 2.0;
+  private showMaxZOff = 1.6;
   private fxEdge!: HTMLDivElement;
   private fxFlash!: HTMLDivElement;
   private fxVig!: HTMLDivElement;
@@ -942,6 +961,59 @@ export class Scene3D {
     this.renderer.domElement.addEventListener("click", this.click);
     this.renderer.domElement.addEventListener("pointermove", this.hover);
     (window as any).__tipoffScene = this;
+    if (import.meta.env.DEV) {
+      const sdMode = new URLSearchParams(window.location.search).get("showdown");
+      if (sdMode === "caught" || sdMode === "escaped") {
+        (window as any).__showdown = () => {
+          if (!this.ready) return false;
+          const caught = sdMode === "caught";
+          this.orbit = false;
+          this.showLock = false;
+          const wall = this.view?.wall ?? {
+            price: 150_00000000, open: 150_00000000, elapsed: 60, round: 999,
+            points: [], marks: [], shocks: [], future: [], title: "", sub: "",
+          };
+          const drumView: View = {
+            stage: "drum",
+            seats: Array.from({ length: N }, (_, k) => ({ empty: false, pos: k % 2 ? 2 : -2, mood: 0 })),
+            me: 0,
+            insiderMe: false,
+            insider: 2,
+            caught,
+            votes: [2, 2, 255, 2, 0, 255],
+            wall,
+          };
+          this.bots.forEach((b, k) => {
+            b.body.visible = true;
+            b.root.position.copy(this.spot(k, drumView));
+            b.yaw = Math.PI;
+            b.root.rotation.y = Math.PI;
+            b.moving = false;
+            b.down = 0;
+            b.slump = 0;
+            b.queue = [];
+            b.hold = false;
+            b.holdEnd = false;
+            this.play(b, "Idle");
+          });
+          this.view = drumView;
+          this.showInit = false;
+          this.transT = 1;
+          this.set({ ...drumView, stage: "reveal" });
+          this.showLock = true;
+          this.transT = 1;
+          this.direct(this.view, this.clock.elapsedTime);
+          this.camera.position.copy(this.camPos);
+          this.look.copy(this.camLook);
+          this.fov = this.targetFov;
+          this.camera.fov = this.fov;
+          this.camera.updateProjectionMatrix();
+          this.camera.lookAt(this.look);
+          this.camera.updateMatrixWorld(true);
+          return true;
+        };
+      }
+    }
     this.drawTicker();
     this.load();
     this.loop();
@@ -1150,6 +1222,7 @@ export class Scene3D {
     }
     this.slow = 0.4;
     this.waveT = this.quality > 0 && !this.reducedMotion ? 0 : 9;
+    this.ringWave.position.set(0, 0.06, 0);
     this.ringWaveT = this.quality > 0 ? 0 : 9;
     this.ringWaveStrong = strong;
     this.tiltV += (bps > 0 ? 1.55 : -1.55) * mult;
@@ -1210,7 +1283,287 @@ export class Scene3D {
     }
   }
 
+  private showdownAngles(insPos: THREE.Vector3, insIdx: number, accusers: number[]): number[] {
+    const k = accusers.length;
+    if (k === 0) return [];
+    if (insPos.x < -3.0) {
+      if (k === 1) return [1.15];
+      return accusers.map((_, idx) => 1.06 + (idx / (k - 1)) * 1.45);
+    }
+    if (insPos.x > 3.0) {
+      if (k === 1) return [-1.15];
+      return accusers.map((_, idx) => -2.51 + (idx / (k - 1)) * 1.45);
+    }
+    const left = accusers.filter((a) => a < insIdx).length;
+    if (k === 1) return [accusers[0] < insIdx ? -1.12 : 1.12];
+    if (k === 2) return [-1.18, 1.18];
+    if (k === 3) return left >= 2 ? [-2.28, -1.28, 1.18] : [-1.18, 1.28, 2.28];
+    if (k === 4) return [-1.95, -1.10, 1.10, 1.95];
+    return left >= 3 ? [-2.18, -1.58, -1.06, 1.12, 1.95] : [-1.95, -1.12, 1.06, 1.58, 2.18];
+  }
+
+  private emitMagentaBurst(at: THREE.Vector3, count: number, ringVel: boolean) {
+    if (this.quality <= 0) return;
+    this.emit(count, (pt, idx) => {
+      const a = (idx / count) * Math.PI * 2 + Math.random() * 0.35;
+      if (ringVel) {
+        const spd = 6.5 + Math.random() * 5.5;
+        pt.p.set(at.x + Math.cos(a) * 0.4, 0.45, at.z + Math.sin(a) * 0.4);
+        pt.v.set(Math.cos(a) * spd, 1.2 + Math.random() * 2.4, Math.sin(a) * spd);
+        pt.col.set(idx % 2 === 0 ? MAGENTA : 0xff8af7);
+        pt.maxLife = pt.life = 0.48 + Math.random() * 0.25;
+        pt.size = 1.45; pt.grav = 3.5; pt.drag = 0.93; pt.grow = -0.35;
+      } else {
+        const r = 0.65 + Math.random() * 0.75;
+        pt.p.set(at.x + Math.cos(a) * r, 0.35 + Math.random() * 1.15, at.z - 0.15 + Math.sin(a) * r);
+        pt.v.set(Math.cos(a) * (1.8 + Math.random() * 2.0), 1.3 + Math.random() * 1.9, Math.sin(a) * (1.8 + Math.random() * 2.0));
+        pt.col.set(idx % 2 === 0 ? 0xa61fd6 : 0xe032b8).multiplyScalar(0.32);
+        pt.maxLife = pt.life = 0.9 + Math.random() * 0.45;
+        pt.size = 1.45 + Math.random() * 0.75;
+        pt.grav = -0.5; pt.drag = 0.94; pt.grow = 1.15;
+      }
+    });
+  }
+
+  private setupShowdown(v: View) {
+    const ins = v.insider, insBot = this.bots[ins];
+    if (!insBot) return;
+    this.showInit = true;
+    this.showDanceDone = false;
+    this.showStandDone = false;
+    this.showKnockAt = 0;
+    const insPos = insBot.root.position.clone();
+    const accusers: number[] = [];
+    for (let i = 0; i < N; i++) {
+      const b = this.bots[i];
+      if (!b) continue;
+      b.showRole = "none";
+      b.showPos = undefined;
+      b.showPush = undefined;
+      b.showPushStart = undefined;
+      b.showYaw = undefined;
+      b.showSpeed = undefined;
+      b.showArrived = false;
+      b.revealPending = false;
+      if (i !== ins && !v.seats[i]?.empty && v.votes?.[i] === ins) accusers.push(i);
+    }
+    this.showAccusers = accusers;
+    const angles = this.showdownAngles(insPos, ins, accusers);
+    const instant = this.quality === 0 || this.reducedMotion;
+
+    // Insider bot setup
+    insBot.yaw = Math.PI;
+    insBot.root.rotation.y = Math.PI;
+    insBot.moving = false;
+    this.express(insBot, v.caught ? "Angry" : null);
+    if (v.caught) {
+      if (instant) {
+        this.cagePending = false;
+        this.cage.visible = true;
+        this.cage.position.set(insPos.x, 0, insPos.z);
+        this.cageSlammed = true;
+        this.play(insBot, "Sitting", true, true);
+        sfx.clang();
+      } else {
+        this.cagePending = true;
+        this.cage.visible = false;
+        this.cageSlammed = false;
+        this.play(insBot, "No", true);
+      }
+    } else {
+      this.cagePending = false;
+      this.cage.visible = false;
+      if (accusers.length === 0 || instant) {
+        this.play(insBot, "Dance");
+        this.fountain(insPos, 120, true);
+        this.emitMagentaBurst(insPos, 28, false);
+        if (instant && accusers.length > 0) sfx.knock();
+      } else {
+        this.play(insBot, "Idle");
+      }
+    }
+
+    // Accusers (ring radius 1.6 facing I; 2.2 radial push target)
+    let minX = insPos.x, maxX = insPos.x, maxZ = insPos.z;
+    accusers.forEach((seatIdx, k) => {
+      const b = this.bots[seatIdx];
+      if (!b) return;
+      const a = angles[k];
+      const dir = new THREE.Vector3(Math.sin(a), 0, Math.cos(a));
+      const ringPos = insPos.clone().addScaledVector(dir, 1.6);
+      const pushPos = insPos.clone().addScaledVector(dir, 3.8);
+      pushPos.x = THREE.MathUtils.clamp(pushPos.x, -5.85, 5.85);
+      pushPos.z = THREE.MathUtils.clamp(pushPos.z, -8.8, 9.1);
+      const spanPt = v.caught ? ringPos : pushPos;
+      minX = Math.min(minX, ringPos.x, spanPt.x);
+      maxX = Math.max(maxX, ringPos.x, spanPt.x);
+      maxZ = Math.max(maxZ, ringPos.z, spanPt.z);
+      b.showRole = "accuser";
+      b.showPos = ringPos;
+      b.showPush = pushPos;
+      b.showYaw = Math.atan2(insPos.x - ringPos.x, insPos.z - ringPos.z);
+      const dist = ringPos.distanceTo(b.root.position);
+      b.showSpeed = Math.max(4.5, dist / 0.65);
+      if (instant) {
+        b.root.position.copy(ringPos);
+        b.yaw = b.showYaw;
+        b.root.rotation.y = b.showYaw;
+        b.moving = false;
+        b.showArrived = true;
+        this.express(b, v.caught ? null : "Sad");
+        this.play(b, v.caught ? "ThumbsUp" : "Idle", false, v.caught);
+      } else {
+        this.express(b, null);
+        if (dist > 0.04) {
+          b.moving = true;
+          this.play(b, "Running");
+        } else {
+          b.showArrived = true;
+          b.moving = false;
+          this.play(b, "Idle");
+        }
+      }
+    });
+
+    // Wrong-accusers and idle spectators
+    for (let i = 0; i < N; i++) {
+      if (i === ins || accusers.includes(i)) continue;
+      const b = this.bots[i];
+      if (!b || v.seats[i]?.empty) continue;
+      const target = v.votes && i < v.votes.length ? v.votes[i] : 255;
+      const wrong = target >= 0 && target < N && target !== ins && !!this.bots[target];
+      b.showRole = wrong ? "wrong" : "idle";
+      b.showPos = new THREE.Vector3(laneX(i) * 1.15, 0, 2.5);
+      const lookPos = wrong ? this.bots[target].root.position : insPos;
+      b.showYaw = Math.atan2(lookPos.x - b.showPos.x, lookPos.z - b.showPos.z);
+      this.express(b, v.caught ? null : "Sad");
+      if (instant) {
+        b.root.position.copy(b.showPos);
+        b.yaw = b.showYaw;
+        b.root.rotation.y = b.showYaw;
+        b.moving = false;
+        b.showArrived = true;
+        if (wrong) this.play(b, "No", true);
+        else this.play(b, v.caught ? "ThumbsUp" : "Idle", false, v.caught);
+      } else {
+        b.revealPending = true;
+      }
+    }
+
+    this.showCenterX = (minX + maxX) / 2;
+    this.showHalfX = (maxX - minX) / 2 + (v.caught ? 1.15 : 1.75);
+    this.showMaxZOff = Math.max(0, maxZ - insPos.z);
+    this.showPhase = instant || accusers.length === 0 ? "done" : "charge";
+  }
+
+  private updateShowdown(v: View, re: number, raw: number) {
+    const insBot = this.bots[v.insider];
+    if (!insBot) return;
+    const insPos = insBot.root.position;
+    if (v.caught && this.cagePending && this.showAccusers.length === 0 && re >= 0.25) {
+      this.cagePending = false;
+      this.cage.visible = true;
+      this.cage.position.set(insPos.x, this.camera.aspect < 1.25 ? 4.4 : 6.2, insPos.z);
+      this.cageVy = 8.0;
+      this.playSeq(insBot, ["Punch", "Punch", "Sitting"], true);
+    }
+
+    if (this.showPhase === "charge") {
+      let allArrived = true;
+      for (const idx of this.showAccusers) {
+        const ab = this.bots[idx];
+        if (!ab || !ab.showPos || ab.showArrived) continue;
+        const d = ab.showPos.clone().sub(ab.root.position);
+        const len = d.length();
+        if (len > 0.04) {
+          allArrived = false;
+          const step = Math.min(len, (ab.showSpeed ?? 9) * raw);
+          ab.root.position.addScaledVector(d, step / len);
+          ab.yaw = Math.atan2(d.x, d.z);
+          if (!ab.moving) { ab.moving = true; this.play(ab, "Running"); }
+          ab.lean += (0.14 - ab.lean) * Math.min(1, raw * 12);
+        } else {
+          ab.root.position.copy(ab.showPos);
+          ab.showArrived = true;
+          ab.moving = false;
+          ab.lean = 0;
+          ab.yaw = ab.showYaw ?? Math.PI;
+          this.play(ab, "Idle");
+        }
+      }
+      if ((allArrived && re >= 0.68) || re >= 0.90) {
+        for (const idx of this.showAccusers) {
+          const ab = this.bots[idx];
+          if (ab && ab.showPos) {
+            ab.root.position.copy(ab.showPos);
+            ab.showArrived = true;
+            ab.moving = false;
+            ab.lean = 0;
+            ab.yaw = ab.showYaw ?? Math.PI;
+          }
+        }
+        if (v.caught) {
+          this.showPhase = "done";
+          if (this.cagePending) {
+            this.cagePending = false;
+            this.cage.visible = true;
+            this.cage.position.set(insPos.x, this.camera.aspect < 1.25 ? 4.4 : 6.2, insPos.z);
+            this.cageVy = 8.0;
+            this.playSeq(insBot, ["Punch", "Punch", "Sitting"], true);
+          }
+        } else {
+          this.showPhase = "knock";
+          this.showKnockAt = re;
+          sfx.knock();
+          this.play(insBot, "Punch", true);
+          (this.ringWave.material as THREE.MeshBasicMaterial).color.set(MAGENTA);
+          this.ringWave.position.set(insPos.x, 0.06, insPos.z);
+          this.ringWaveStrong = true;
+          this.ringWaveT = 0;
+          this.emitMagentaBurst(insPos, 36, true);
+          for (const idx of this.showAccusers) {
+            const ab = this.bots[idx];
+            if (!ab) continue;
+            ab.showPushStart = ab.root.position.clone();
+            this.express(ab, "Sad");
+            this.play(ab, "Death", true, true);
+          }
+        }
+      }
+    } else if (this.showPhase === "knock") {
+      const ke = re - this.showKnockAt;
+      const u = Math.min(1, ke / 0.35);
+      const ease = 1 - Math.pow(1 - u, 3);
+      for (const idx of this.showAccusers) {
+        const ab = this.bots[idx];
+        if (!ab) continue;
+        if (ab.showPushStart && ab.showPush) ab.root.position.lerpVectors(ab.showPushStart, ab.showPush, ease);
+        ab.yaw = ab.showYaw ?? Math.PI;
+        ab.lean += (0 - ab.lean) * Math.min(1, raw * 10);
+      }
+      if (ke >= 0.35 && !this.showDanceDone) {
+        this.showDanceDone = true;
+        this.play(insBot, "Dance");
+        this.fountain(insPos, 120, true);
+        this.emitMagentaBurst(insPos, 28, false);
+      }
+      if (ke >= 1.15 && !this.showStandDone) {
+        this.showStandDone = true;
+        this.showPhase = "done";
+        for (const idx of this.showAccusers) {
+          const ab = this.bots[idx];
+          if (!ab) continue;
+          ab.hold = false;
+          ab.holdEnd = false;
+          ab.queue = [];
+          this.play(ab, "Standing", true, false, 1.6);
+        }
+      }
+    }
+  }
+
   set(v: View) {
+    if (import.meta.env.DEV && this.showLock) return;
     const prev = this.view;
     this.view = v;
     if (v.stage !== "vote" || v.canVote === false) { this.hot = -1; this.renderer.domElement.style.cursor = ""; }
@@ -1218,7 +1571,13 @@ export class Scene3D {
     const changed = prev?.stage !== v.stage;
     if (changed) {
       this.stageAt = this.clock.elapsedTime;
-      if (v.stage === "reveal") {
+      if (v.stage !== "reveal") {
+        this.showInit = false;
+        this.showPhase = "idle";
+        this.cagePending = false;
+        this.cage.visible = false;
+        this.showAccusers = [];
+      } else {
         for (const coin of this.coins) coin.life = 0;
         this.cageSlammed = false;
         this.cageVy = 0;
@@ -1265,7 +1624,7 @@ export class Scene3D {
     }
     this.tiltTo = v.stage === "live" ? THREE.MathUtils.clamp((v.wall.shocks.reduce((a, s) => a + (Math.abs(s.bps) > 1 ? s.bps : 0), 0) / 250) * 2.2, -7, 7) * (Math.PI / 180) : 0;
     this.nearGate.visible = !this.lined(v.stage);
-    this.cage.visible = v.stage === "reveal" && v.caught && !!this.bots[v.insider];
+    if (v.stage !== "reveal") this.cage.visible = false;
     let longs = 0, shorts = 0;
     this.bots.forEach((b, i) => {
       const s = v.seats[i], col = this.col.set(this.colors[i]);
@@ -1287,38 +1646,14 @@ export class Scene3D {
         b.dealDone = false;
         b.revealPending = false;
         this.express(b, null);
-        if (!b.moving) this.play(b, "Idle");
-        if (v.stage === "deal") this.play(b, "Standing", true, true);
-        if (v.stage === "drum") this.express(b, "Surprised");
-        if (v.stage === "reveal") {
-          if (i === v.insider) {
-            this.express(b, v.caught ? "Angry" : null);
-            if (v.caught) {
-              this.playSeq(b, ["Punch", "Punch", "Sitting"], true);
-              this.cage.position.set(b.root.position.x, this.camera.aspect < 1.25 ? 4.4 : 6.8, b.root.position.z);
-              this.cageVy = 0;
-              this.cageSlammed = false;
-            } else {
-              this.play(b, "Dance");
-              this.fountain(b.root.position, 120, true);
-              this.emit(28, (pt, idx) => {
-                const a = (idx / 28) * Math.PI * 2 + Math.random() * 0.35;
-                const r = 0.65 + Math.random() * 0.75;
-                pt.p.set(b.root.position.x + Math.cos(a) * r, 0.35 + Math.random() * 1.15, b.root.position.z - 0.15 + Math.sin(a) * r);
-                pt.v.set(Math.cos(a) * (1.8 + Math.random() * 2.0), 1.3 + Math.random() * 1.9, Math.sin(a) * (1.8 + Math.random() * 2.0));
-                pt.col.set(idx % 2 === 0 ? 0xa61fd6 : 0xe032b8).multiplyScalar(0.32);
-                pt.maxLife = pt.life = 0.9 + Math.random() * 0.45;
-                pt.size = 1.45 + Math.random() * 0.75;
-                pt.grav = -0.5; pt.drag = 0.94; pt.grow = 1.15;
-              });
-            }
-          } else {
-            this.express(b, v.caught ? null : "Sad");
-            b.revealPending = true;
-          }
+        if (v.stage !== "reveal") {
+          if (!b.moving) this.play(b, "Idle");
+          if (v.stage === "deal") this.play(b, "Standing", true, true);
+          if (v.stage === "drum") this.express(b, "Surprised");
         }
       } else if (v.stage === "live" && b.current === "Idle" && b.slump <= 0) this.express(b, s.mood < 0 ? "Sad" : null);
     });
+    if (v.stage === "reveal" && !this.showInit) this.setupShowdown(v);
     this.longGateMat.emissiveIntensity = 1.15 + longs * 0.35;
     this.shortGateMat.emissiveIntensity = 1.15 + shorts * 0.35;
     this.longChevMat.opacity = Math.min(0.9, 0.24 + longs * 0.13);
@@ -1620,12 +1955,15 @@ export class Scene3D {
       const p = this.bots[v!.insider].root.position;
       const el = t - this.stageAt;
       const orbitAngle = Math.max(0, el - 0.85) * 0.28;
-      const orbitPan = Math.sin(orbitAngle) * (portrait ? 0.2 : 1.45);
-      fov = portrait ? 44 : 54;
-      const camX = (portrait ? p.x : p.x * 0.62) + orbitPan;
-      const back = portrait ? 7.2 : 9.4;
-      this.camPos.set(camX, portrait ? 3.0 : 2.85, p.z + back);
-      this.camLook.set(portrait ? p.x : p.x * 0.48, portrait ? 1.85 : 2.0, p.z);
+      const orbitPan = Math.sin(orbitAngle) * (portrait ? 0.15 : 1.45);
+      const wideEscape = !v!.caught && this.showAccusers.length > 0;
+      fov = portrait ? (wideEscape ? 62 : 54) : 54;
+      const spanBack = portrait ? this.showHalfX / (Math.tan((fov * Math.PI) / 360) * aspect) + this.showMaxZOff : 0;
+      const centerX = portrait && this.showAccusers.length > 0 ? this.showCenterX : portrait ? p.x : p.x * 0.62;
+      const camX = centerX + orbitPan;
+      const back = portrait ? Math.max(wideEscape ? 14.5 : 11.4, spanBack) : 9.4;
+      this.camPos.set(camX, portrait ? (wideEscape ? 4.2 : 3.3) : 2.85, p.z + back);
+      this.camLook.set(portrait ? centerX : p.x * 0.48, portrait ? (wideEscape ? 1.35 : 1.55) : 2.0, p.z);
     } else {
       this.camPos.set(Math.sin(t * 0.2) * 2.5, 6.2, 15 * a);
       this.camLook.set(0, 3.6, -4);
@@ -1840,6 +2178,7 @@ export class Scene3D {
         this.play(this.bots[domAcc], "No", true);
       }
     }
+    if (stage === "reveal" && v && this.showInit) this.updateShowdown(v, t - this.stageAt, raw);
     const pendingTags: { el: HTMLElement; px: number; py: number; hw: number; h: number }[] = [];
     this.bots.forEach((b, i) => {
       b.mixer.update(dt);
@@ -1847,8 +2186,8 @@ export class Scene3D {
       b.down = Math.max(0, b.down - dt);
       b.slump = Math.max(0, b.slump - dt);
       if (b.down === 0 && b.current === "Death" && stage === "live") { this.play(b, "Idle"); this.express(b, "Sad"); }
-      if (v && s && b.body.visible && b.down === 0 && !(stage === "reveal" && i === v.insider)) {
-        const to = this.spot(i, v), d = to.sub(b.root.position), len = d.length();
+      if (v && s && b.body.visible && b.down === 0 && !(stage === "reveal" && (i === v.insider || b.showRole === "accuser"))) {
+        const to = stage === "reveal" && b.showPos ? b.showPos.clone() : this.spot(i, v), d = to.sub(b.root.position), len = d.length();
         if (len > 0.04) {
           if (!b.moving) b.moveDist = len;
           const runMove = dark || b.moveDist >= TILE * 1.5;
@@ -1864,24 +2203,32 @@ export class Scene3D {
             b.moving = false;
             if (b.revealPending && v?.stage === "reveal") {
               b.revealPending = false;
-              v.caught ? this.playSeq(b, ["Jump", "ThumbsUp"]) : this.play(b, "No", true);
+              if (b.showRole === "wrong") this.play(b, "No", true);
+              else if (v.caught) this.playSeq(b, ["Jump", "ThumbsUp"]);
+              else this.play(b, "Idle");
             } else {
               this.play(b, "Idle", false, false, b.nervous ? 1.3 : 1);
             }
           } else if (b.revealPending && v?.stage === "reveal") {
             b.revealPending = false;
-            v.caught ? this.playSeq(b, ["Jump", "ThumbsUp"]) : this.play(b, "No", true);
+            if (b.showRole === "wrong") this.play(b, "No", true);
+            else if (v.caught) this.playSeq(b, ["Jump", "ThumbsUp"]);
+            else this.play(b, "Idle");
           }
           b.lean += (0 - b.lean) * Math.min(1, raw * 10);
-          let idleYaw = dark ? 0 : Math.PI;
-          if (!dark && t > b.nextGlance) b.nextGlance = t + 3.2 + Math.random() * 4.5;
-          if (!dark && this.lastTrader >= 0 && this.lastTrader !== i && t - this.glanceAt < 1.5 && this.bots[this.lastTrader]) {
-            const oPos = this.bots[this.lastTrader].root.position;
-            const toOther = Math.atan2(oPos.x - b.root.position.x, oPos.z - b.root.position.z);
-            const deltaY = Math.atan2(Math.sin(toOther - Math.PI), Math.cos(toOther - Math.PI));
-            idleYaw = Math.PI + THREE.MathUtils.clamp(deltaY, -0.65, 0.65);
+          if (stage === "reveal" && b.showYaw !== undefined) {
+            b.yaw = b.showYaw;
+          } else {
+            let idleYaw = dark ? 0 : Math.PI;
+            if (!dark && t > b.nextGlance) b.nextGlance = t + 3.2 + Math.random() * 4.5;
+            if (!dark && this.lastTrader >= 0 && this.lastTrader !== i && t - this.glanceAt < 1.5 && this.bots[this.lastTrader]) {
+              const oPos = this.bots[this.lastTrader].root.position;
+              const toOther = Math.atan2(oPos.x - b.root.position.x, oPos.z - b.root.position.z);
+              const deltaY = Math.atan2(Math.sin(toOther - Math.PI), Math.cos(toOther - Math.PI));
+              idleYaw = Math.PI + THREE.MathUtils.clamp(deltaY, -0.65, 0.65);
+            }
+            b.yaw = idleYaw;
           }
-          b.yaw = idleYaw;
         }
       } else {
         b.lean += (0 - b.lean) * Math.min(1, raw * 10);
@@ -2131,7 +2478,12 @@ export class Scene3D {
         this.cage.position.y = Math.max(0, this.cage.position.y - this.cageVy * raw);
       } else if (!this.cageSlammed) {
         this.cageSlammed = true;
+        sfx.clang();
         if (!this.reducedMotion) this.shake = Math.max(this.shake, 0.25);
+        for (const idx of this.showAccusers) {
+          const ab = this.bots[idx];
+          if (ab) this.playSeq(ab, ["Jump", "ThumbsUp"], true);
+        }
         this.emit(44, (pt, idx) => {
           const a = (idx / 44) * Math.PI * 2 + Math.random() * 0.2;
           pt.p.set(this.cage.position.x + Math.cos(a) * 1.15, 0.12, this.cage.position.z + Math.sin(a) * 1.15);
@@ -2199,7 +2551,10 @@ export class Scene3D {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.motionMq?.removeEventListener?.("change", this.onMotion);
-    if ((window as any).__tipoffScene === this) delete (window as any).__tipoffScene;
+    if ((window as any).__tipoffScene === this) {
+      delete (window as any).__tipoffScene;
+      if (import.meta.env.DEV) delete (window as any).__showdown;
+    }
     this.fxEdge.remove();
     this.fxFlash.remove();
     this.fxVig.remove();
