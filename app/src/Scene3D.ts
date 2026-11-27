@@ -1610,10 +1610,10 @@ export class Scene3D {
       const dolly = stage === "vote" ? Math.sin((t - this.stageAt) * 0.28) * 1.6 : 0;
       const focus = this.hot >= 0 ? laneX(this.hot) * 0.35 : dolly * 0.65;
       const targetZ = 6.6;
-      this.camPos.set(focus, portraitVote ? 1.4 : portraitDrum ? 1 : 2.65, 7.2 + Math.max(9.6, minDz));
+      this.camPos.set(focus, portraitVote ? 3.55 : portraitDrum ? 2.9 : 2.65, 7.2 + Math.max(9.6, minDz));
       this.camLook.set(
         dolly * 0.35 + (this.hot >= 0 ? laneX(this.hot) * 0.15 : 0),
-        portraitVote ? 9.3 : portraitDrum ? 14.1 : 2.1,
+        portraitVote ? 3.35 : portraitDrum ? 2.45 : 2.1,
         targetZ,
       );
     } else if (stage === "reveal" && this.bots[v!.insider]) {
