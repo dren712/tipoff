@@ -3,7 +3,7 @@ import * as chainMod from "./chain";
 import {
   CONVICTION, FIRST_TABLE, INTERMISSION, MAX_POS, NONE, ROUND_SECS, SEATS, Session, Table, SeatPrivate, VOTE_SECS, ZERO, actions, base, equity, explorer,
   isRumour, voteSeat,
-  fetchSeat, fetchTable, ledgerPda, redraw, secretPda, seatPda, short, tablePda,
+  fetchSeat, fetchTable, getPlayerName, ledgerPda, redraw, secretPda, seatPda, short, tablePda,
 } from "./chain";
 import { Chart } from "./Chart";
 import type { Point, Mark } from "./Chart";
@@ -717,7 +717,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
               {votesFor(i) > 0 && <span className="votes"><Icon name="gavel" size={12} />{votesFor(i)}</span>}
               {empty ? (canSit ? <button className="sit" disabled={busy} onClick={() => run("Seated", () => actions.sit(session, key, i))}>Sit here</button> : <span className="plate ghost">Open</span>) : (
                 <>
-                  <span className="plate"><b>{SEAT_NAMES[i]}</b>{i === mySeat && <em>You</em>}</span>
+                  <span className="plate"><b>{i === mySeat && getPlayerName() ? getPlayerName() : SEAT_NAMES[i]}</b>{i === mySeat && <em>You</em>}</span>
                   {tells >= 1 && <span className={`tag-tell ${tells >= 2 ? "hot" : ""}`}><Icon name="eye" size={11} />{tellText}</span>}
                   {trading && <span className={`tag-pnl num ${eq[i] >= 0 ? "up" : "down"}`}>{chips(eq[i])}</span>}
                   {accusing && myVote === i && <span className="tag-mark"><Icon name="gavel" size={12} />Accused</span>}
@@ -976,7 +976,7 @@ export function TableView({ session, index, autoSit = false, median, onLeave, on
                 <div key={s.seat} className={`suspect score ${s.seat === curSnap.insider ? "insider" : ""} ${s.seat === curSnap.mySeat ? "self" : ""}`} style={{ ["--c" as any]: SEAT_COLORS[s.seat] }}>
                   <span className="s-rank">{rank + 1}</span>
                   <Avatar seat={s.seat} size={38} masked={s.seat === curSnap.insider} />
-                  <span className="s-name">{s.name}{s.seat === curSnap.mySeat && <em>You</em>}</span>
+                  <span className="s-name">{s.seat === curSnap.mySeat && getPlayerName() ? getPlayerName() : s.name}{s.seat === curSnap.mySeat && <em>You</em>}</span>
                   <span className={`s-pnl num ${Math.round(s.last) > 0 ? "up" : Math.round(s.last) < 0 ? "down" : ""}`}>{chips(s.last * scoreMul)}</span>
                   {s.votesGot > 0 && <span className="s-votes"><Icon name="gavel" size={12} />{s.votesGot}</span>}
                   <span className="s-meta">{s.seat === curSnap.insider ? <b className="s-ins">Insider</b> : s.suspect !== NONE ? <>accused <i className="s-dot" style={{ background: SEAT_COLORS[s.suspect] }} />{SEAT_NAMES[s.suspect]}</> : "no vote"}</span>

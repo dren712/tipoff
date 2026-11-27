@@ -3,7 +3,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { FIRST_TABLE, PID, ROUND_SECS, SEATS, Session, TABLES, Table, VOTE_SECS, ZERO, base, equity, explorer, fetchTable, guestKey, openSession, playerPda, short, tablePda } from "./chain";
+import { FIRST_TABLE, PID, ROUND_SECS, SEATS, Session, TABLES, Table, VOTE_SECS, ZERO, base, equity, explorer, fetchTable, getPlayerName, guestKey, openSession, playerPda, setPlayerName, short, tablePda } from "./chain";
 import { Avatar, SEAT_COLORS } from "./Avatar";
 import { Icon, Logo } from "./Icon";
 import { Scene3D } from "./Scene3D";
@@ -199,6 +199,15 @@ function Lobby({ session, onOpen, onPlay, walletKey, walletConnected, walletBusy
   const [copied, setCopied] = useState<number | null>(null);
   const [copyTick, setCopyTick] = useState(0);
   const copyTimer = useRef<number | undefined>(undefined);
+  const [playerName, setNameState] = useState<string>(() => getPlayerName());
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const startEditName = () => { setNameDraft(playerName); setEditingName(true); };
+  const commitName = () => {
+    const saved = setPlayerName(nameDraft);
+    setNameState(saved);
+    setEditingName(false);
+  };
   useEffect(() => {
     let live = true;
     const load = async () => {
@@ -254,20 +263,44 @@ function Lobby({ session, onOpen, onPlay, walletKey, walletConnected, walletBusy
       <header className="lobby-top">
         <div className="brand"><Logo size={30} /><span className="wordmark">Tipoff</span></div>
         <span className="grow" />
-        <span className="pill" title={walletConnected ? "Signed in with your wallet. A deterministic session key signs your moves with zero SOL, pop-ups, or fees." : "A key made in this browser signs your moves. No wallet, no fees."}><i className="dot on" />{walletConnected && walletKey ? `Wallet ${short(walletKey)}` : `Guest ${short(session.id)}`}</span>
+        {editingName ? (
+          <form className="name-form" onSubmit={(e) => { e.preventDefault(); commitName(); }}>
+            <input
+              className="name-input"
+              type="text"
+              maxLength={16}
+              autoFocus
+              placeholder="Your name"
+              aria-label="Player name"
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={commitName}
+              onKeyDown={(e) => { if (e.key === "Escape") setEditingName(false); }}
+            />
+          </form>
+        ) : (
+          <button
+            type="button"
+            className="pill pill-edit"
+            onClick={startEditName}
+            title={walletConnected ? "Click to edit your display name. Signed in with your wallet (0 SOL, no pop-ups)." : "Click to edit your display name. Guest session key (0 SOL, no pop-ups)."}
+          >
+            <i className="dot on" />
+            <span>{playerName || (walletConnected && walletKey ? `Wallet ${short(walletKey)}` : `Guest ${short(session.id)}`)}</span>
+            <span className="pill-pencil" aria-hidden="true">✎</span>
+          </button>
+        )}
         <button className="wallet-connect" type="button" title={WALLET_TITLE} disabled={walletBusy} onClick={onWalletClick}>
           <span className="wallet-label-wide">{walletBusy ? "Connecting…" : walletConnected ? "Disconnect" : "Connect wallet"}</span>
           <span className="wallet-label-short">{walletBusy ? "…" : walletConnected ? "Disconnect" : "Connect"}</span>
         </button>
       </header>
-      {walletNotice && <p className="wallet-notice" role="status">
-        {walletNotice}
-        {walletNotice.startsWith("You need a little devnet SOL") && <> <a href="https://faucet.solana.com" target="_blank" rel="noreferrer">Solana faucet</a></>}
-      </p>}
+      {walletNotice && <p className="wallet-notice" role="status">{walletNotice}</p>}
 
       <section className="pitch">
+        <p className="pitch-built"><span className="dot on" aria-hidden="true" /><b>Solana</b> · <b>MagicBlock Private Rollup</b></p>
         <h1>Someone on this floor already knows the news.</h1>
-        <p>A 60-second trading game where one of six players secretly knows the news, and only a private rollup can keep that secret.</p>
+        <p>60 seconds to trade live SOL/USD, spot the insider from the tape, and seal your vote.</p>
         <div className="cta">
           <button type="button" className="btn gold big" disabled={loading} onClick={() => onPlay(playIdx)}>
             {loading ? (
@@ -278,22 +311,24 @@ function Lobby({ session, onOpen, onPlay, walletKey, walletConnected, walletBusy
               <><Icon name="play" size={22} />Play now</>
             )}
           </button>
-          <span className="cta-note">No wallet. No fees. Bots fill empty seats.</span>
+          <span className="cta-note">Instant play · Zero fees · Optional wallet</span>
         </div>
         <ul className="pitch-proof" aria-label="Security proof">
-          <li><Icon name="lock" size={14} /><span>Insider picked by MagicBlock VRF inside a private rollup</span></li>
-          <li><Icon name="shield" size={14} /><a href="https://github.com/dren712/tipoff/blob/main/docs/ATTACKS.md" target="_blank" rel="noreferrer">11 of 11 live cheat attempts rejected</a></li>
-          <li><Icon name="bolt" size={14} /><span>No wallet, no fees, about half a second per move</span></li>
+          <li><Icon name="lock" size={13} /><span>MagicBlock VRF</span></li>
+          <li><Icon name="shield" size={13} /><a href="https://github.com/dren712/tipoff/blob/main/docs/ATTACKS.md" target="_blank" rel="noreferrer">11/11 cheats rejected</a></li>
+          <li><Icon name="bolt" size={13} /><span>~0.5s moves</span></li>
         </ul>
-        <p className="pitch-built">Built on <b>Solana</b> · <b>MagicBlock Private Ephemeral Rollup</b></p>
       </section>
 
       <section className="rooms" aria-label="Tables">
-        <ol className="how">
-          <li><Icon name="bolt" /><b>Trade</b><span>60 seconds, one tap per lot</span></li>
-          <li><Icon name="eye" /><b>Watch</b><span>Who moved before the news?</span></li>
-          <li><Icon name="gavel" /><b>Accuse</b><span>Right +100. Wrong −50.</span></li>
-        </ol>
+        <div className="rooms-bar">
+          <span className="rooms-title">Live tables</span>
+          <ol className="how">
+            <li><Icon name="bolt" size={14} /><b>Trade</b><span>60s</span></li>
+            <li><Icon name="eye" size={14} /><b>Watch</b><span>live tells</span></li>
+            <li><Icon name="gavel" size={14} /><b>Accuse</b><span>+100 / −50</span></li>
+          </ol>
+        </div>
         <div className="roomrow">
           {Array.from({ length: TABLES }, (_, i) => {
             const t = tables[i];
@@ -306,7 +341,7 @@ function Lobby({ session, onOpen, onPlay, walletKey, walletConnected, walletBusy
                   <span className="room-no">{i + 1}</span>
                   <span className="room-main">
                     <span className="room-head"><b>Table {i + 1}</b><span className="muted">Round {t ? t.round.toString() : "–"}</span></span>
-                    <span className="minis">{Array.from({ length: SEATS }, (_, k) => <Avatar key={k} seat={k} size={26} empty={!t || t.seats[k].player.equals(ZERO)} />)}</span>
+                    <span className="minis">{Array.from({ length: SEATS }, (_, k) => <Avatar key={k} seat={k} size={24} empty={!t || t.seats[k].player.equals(ZERO)} />)}</span>
                     <span className="room-state">
                       <i className={`dot ${st?.kind === "live" ? "on" : st?.kind === "vote" ? "hot" : ""}`} />
                       {st ? st.label : "Loading"}{st?.kind === "live" && <em>{st.left}s</em>}
@@ -329,18 +364,19 @@ function Lobby({ session, onOpen, onPlay, walletKey, walletConnected, walletBusy
               </div>
             );
           })}
-          <div className="room room-locked" aria-disabled="true">
-            <span className="room-no" aria-hidden="true"><Icon name="lock" size={24} /></span>
-            <span className="room-main">
-              <span className="room-head"><b>SOL tables</b><span className="room-badge">Coming with mainnet</span></span>
-              <span className="room-description">Ante SOL, and the pot pays out on-chain at settlement.</span>
-            </span>
-          </div>
         </div>
-        <p className="fineprint">Play chips only, no real money. Runs on Solana devnet inside a MagicBlock private rollup. Program <a href={explorer("address", PID.toBase58())} target="_blank" rel="noreferrer">{short(PID)}</a></p>
+        <div className="mainnet-bar">
+          <span className="mainnet-left">
+            <Icon name="lock" size={14} />
+            <b>SOL tables</b>
+            <span className="room-badge">Coming with mainnet</span>
+            <span className="mainnet-desc">Ante SOL, on-chain pot payout at settlement.</span>
+          </span>
+          <span className="fineprint">Devnet · Play chips only · Program <a href={explorer("address", PID.toBase58())} target="_blank" rel="noreferrer">{short(PID)}</a></span>
+        </div>
       </section>
 
-      <Leaderboard session={session} />
+      <Leaderboard session={session} playerName={playerName} />
     </main>
   );
 }

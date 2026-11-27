@@ -58,6 +58,19 @@ export function guestKey(): Keypair {
   return kp;
 }
 
+const NAME_KEY = "tipoff-name";
+export function getPlayerName(): string {
+  try { return (localStorage.getItem(NAME_KEY) ?? "").trim().slice(0, 16); } catch { return ""; }
+}
+export function setPlayerName(name: string): string {
+  const clean = name.replace(/\s+/g, " ").trim().slice(0, 16);
+  try {
+    if (clean) localStorage.setItem(NAME_KEY, clean);
+    else localStorage.removeItem(NAME_KEY);
+  } catch {}
+  return clean;
+}
+
 const sessionWallet = (kp: Keypair) => ({
   publicKey: kp.publicKey,
   signTransaction: async (tx: any) => (tx.partialSign(kp), tx),

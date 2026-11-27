@@ -28,7 +28,7 @@ const chips = (n: number) => {
   return v === 0 ? "0" : `${v > 0 ? "+" : "−"}${Math.abs(v)}`;
 };
 
-export function Leaderboard({ session }: { session: Session }) {
+export function Leaderboard({ session, playerName }: { session: Session; playerName?: string }) {
   const [board, setBoard] = useState<Board | null>(null);
 
   useEffect(() => {
@@ -95,7 +95,7 @@ export function Leaderboard({ session }: { session: Session }) {
                   <tr key={e.player.toBase58()} className={isMe ? "lb-row me" : "lb-row"}>
                     <th scope="row" className="num lb-pos">#{i + 1}</th>
                     <td className="lb-name">
-                      <span>{nicknameFor(e.player)}</span>
+                      <span>{isMe && playerName ? playerName : nicknameFor(e.player)}</span>
                       {isMe && <em className="lb-you">You</em>}
                     </td>
                     <td className="lb-rank">{rankTitle(e.caught, e.escapes)}</td>
@@ -113,7 +113,7 @@ export function Leaderboard({ session }: { session: Session }) {
                   <tr key={e.player.toBase58()} className="lb-row me pinned">
                     <th scope="row" className="num lb-pos">#{myIdx + 1}</th>
                     <td className="lb-name">
-                      <span>{nicknameFor(e.player)}</span>
+                      <span>{playerName || nicknameFor(e.player)}</span>
                       <em className="lb-you">You</em>
                     </td>
                     <td className="lb-rank">{rankTitle(e.caught, e.escapes)}</td>
