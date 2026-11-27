@@ -1879,8 +1879,8 @@ export class Scene3D {
         this.camPos.set(0, last ? 9.6 : 9.9, 23.2 + z * 0.4);
         this.camLook.set(0, 1.15, 0);
       } else {
-        const camZ = 47 + z, camY = 3.5, targetZ = -1.5;
-        fov = last ? 22.2 : 22;
+        const camZ = 48 + z, camY = 13.5, targetZ = -1.5;
+        fov = last ? 26.2 : 26;
         const game = this.host.closest(".game");
         const tray = game?.querySelector<HTMLElement>(".tray");
         const bar = game?.querySelector<HTMLElement>(".bar");
@@ -1914,7 +1914,7 @@ export class Scene3D {
             return { near: Math.max(...signYs, ...edgeYs), wall: Math.min(...wallTop) };
           };
           const nearLimit = trayTop - 24;
-          let low = -20, high = 3.5;
+          let low = -20, high = 12;
           if (bounds(high).near <= nearLimit) low = high;
           else for (let i = 0; i < 24; i++) {
             const mid = (low + high) / 2;
@@ -1922,7 +1922,7 @@ export class Scene3D {
           }
           const wallLimit = barBottom + 8;
           if (bounds(low).wall < wallLimit) {
-            let lo = low, hi = 3.5;
+            let lo = low, hi = 12;
             for (let i = 0; i < 24; i++) {
               const mid = (lo + hi) / 2;
               if (bounds(mid).wall >= wallLimit) hi = mid; else lo = mid;
