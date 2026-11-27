@@ -1,13 +1,14 @@
 # Keeps the public tables alive: seats bots, requests the VRF draw, ticks, settles and
-# checkpoints. Each run lasts just under the 6-hour job limit and the schedule starts the next.
+# checkpoints. Each run lasts just under the 6-hour job limit. The hourly schedule keeps one
+# run queued behind the active one, so the next run starts as soon as the current one ends.
 name: House runner
 on:
   schedule:
-    - cron: "5 */5 * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 concurrency:
   group: house
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   house:
     runs-on: ubuntu-latest
