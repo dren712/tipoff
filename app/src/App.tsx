@@ -273,7 +273,7 @@ function Lobby({ session, onOpen, onPlay, walletConnected, walletBusy, walletNot
       <header className="lobby-top">
         <div className="brand"><Logo size={30} /><span className="wordmark">Tipoff</span></div>
         <span className="grow" />
-        <span className="pill" title="A key made in this browser signs your moves. No wallet, no fees."><i className="dot on" />{session.player ? "Wallet" : "Guest"} {short(session.id)}</span>
+        <span className="pill" title={session.player ? "Your wallet owns this profile. A session key signs your moves, so there are no pop-ups or fees." : "A key made in this browser signs your moves. No wallet, no fees."}><i className="dot on" />{session.player ? "Wallet" : "Guest"} {short(session.id)}</span>
         <button className="wallet-connect" type="button" title={WALLET_TITLE} disabled={walletBusy} onClick={onWalletClick}>
           <span className="wallet-label-wide">{walletBusy ? "Connecting…" : walletConnected ? "Disconnect" : "Connect wallet"}</span>
           <span className="wallet-label-short">{walletBusy ? "…" : walletConnected ? "Disconnect" : "Connect"}</span>

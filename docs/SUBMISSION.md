@@ -16,7 +16,7 @@ Tipoff is a social deduction trading game on Solana. Six players trade a live SO
 
 Tipoff is a multiplayer trading and deduction game built for Solana Blitz v10 on MagicBlock's private Ephemeral Rollup.
 
-Six players sit at a table straight from the browser, with no wallet and no fees; empty seats are filled by bots so a round starts within seconds. Inside the private rollup, MagicBlock VRF picks one insider and four news shocks, mixing in randomness from every seated player. Only the insider learns when each shock lands and which way it goes.
+Six players sit at a table straight from the browser, with no wallet and no fees; empty seats are filled by bots so a round starts within seconds. Players who want their season record tied to their wallet can connect Phantom or Solflare once; a session key then signs every move, so there are still no pop-ups. Tables with a SOL ante are planned for mainnet. Inside the private rollup, MagicBlock VRF picks one insider and four news shocks, mixing in randomness from every seated player. Only the insider learns when each shock lands and which way it goes.
 
 For 60 seconds everyone trades the same price, which follows the live SOL/USD oracle at 12x. Each Buy or Sell confirms in about half a second and moves the player's robot along its lane on a 3D trading floor. Five seconds before each shock, a public rumour names a direction; it is right two times in three, and only the insider knows which rumours are lies. Every trade prints on the public tape, so the insider has to profit without being obvious.
 
