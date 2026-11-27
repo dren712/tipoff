@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { DELEGATION_PROGRAM_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, Transaction } from "@solana/web3.js";
-import { FIRST_TABLE, PID, ROUND_SECS, SEATS, Session, TABLES, Table, TEE_VALIDATOR, VOTE_SECS, ZERO, base, equity, explorer, fetchTable, guestKey, openSession, playerPda, short, tablePda } from "./chain";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { FIRST_TABLE, PID, ROUND_SECS, SEATS, Session, TABLES, Table, VOTE_SECS, ZERO, base, equity, explorer, fetchTable, guestKey, openSession, playerPda, short, tablePda } from "./chain";
 import { Avatar, SEAT_COLORS } from "./Avatar";
 import { Icon, Logo } from "./Icon";
 import { Scene3D } from "./Scene3D";
@@ -34,50 +34,27 @@ async function walletSessionKey(
   return kp;
 }
 
-async function prepareWalletProfile(
+/// Checks whether this wallet already has a delegated Player PDA on devnet for this session key.
+/// Never sends an on-chain wallet transaction on connect (avoids requiring SOL or triggering wallet warnings).
+async function hasDelegatedProfile(
   wallet: PublicKey,
   sessionKey: Keypair,
   session: Session,
-  sendWalletTransaction: (tx: Transaction, connection: Connection) => Promise<string>,
-): Promise<string | null> {
-  const player = playerPda(wallet);
-  const info = await base.getAccountInfo(player, "confirmed");
-  const delegated = !!info && info.owner.equals(DELEGATION_PROGRAM_ID);
-  let playerAccount: any = null;
-
-  if (info) {
-    if (!info.owner.equals(PID) && !delegated) throw new Error("Could not read this wallet's profile on devnet");
+): Promise<boolean> {
+  try {
+    const player = playerPda(wallet);
+    const info = await base.getAccountInfo(player, "confirmed");
+    if (!info || !info.owner.equals(DELEGATION_PROGRAM_ID)) return false;
+    let acct: any = null;
     try {
-      playerAccount = session.program.coder.accounts.decode("player", info.data);
+      acct = session.program.coder.accounts.decode("player", info.data);
     } catch {
-      if (delegated) playerAccount = await (session.program.account as any).player.fetch(player);
-      else throw new Error("Could not read this wallet's profile on devnet");
+      acct = await (session.program.account as any).player.fetch(player);
     }
-    if (!playerAccount.session.equals(sessionKey.publicKey))
-      throw new Error("This wallet's profile uses a different session key");
+    return !!acct?.session?.equals?.(sessionKey.publicKey);
+  } catch {
+    return false;
   }
-
-  if (delegated) return null;
-  if ((await base.getBalance(wallet, "confirmed")) < 0.01 * LAMPORTS_PER_SOL) {
-    try {
-      const airdrop = await base.requestAirdrop(wallet, 0.5 * LAMPORTS_PER_SOL);
-      await base.confirmTransaction(airdrop, "confirmed");
-    } catch {
-      throw new Error("You need a little devnet SOL for a one-time profile");
-    }
-  }
-
-  const tx = new Transaction();
-  if (!info) {
-    tx.add(await session.program.methods.initPlayer(sessionKey.publicKey)
-      .accountsPartial({ player, wallet }).instruction());
-  }
-  tx.add(await session.program.methods.delegatePlayer()
-    .accountsPartial({ payer: wallet, wallet, pda: player, validator: TEE_VALIDATOR }).instruction());
-  const signature = await sendWalletTransaction(tx, base);
-  const confirmation = await base.confirmTransaction(signature, "confirmed");
-  if (confirmation.value.err) throw new Error("The wallet profile transaction failed to confirm");
-  return signature;
 }
 
 export default function App() {
@@ -118,8 +95,9 @@ export default function App() {
     let live = true;
     if (open !== null) return () => { live = false; };
     if (!wallet.publicKey) {
-      if (sessionRef.current?.player) {
-        openSession(guestKey()).then((next) => { if (live) setActiveSession(next); }).catch(() => {});
+      const gk = guestKey();
+      if (sessionRef.current && (!sessionRef.current.kp.publicKey.equals(gk.publicKey) || sessionRef.current.player)) {
+        openSession(gk).then((next) => { if (live) setActiveSession(next); }).catch(() => {});
       }
       return () => { live = false; };
     }
@@ -129,10 +107,11 @@ export default function App() {
       try {
         const kp = await walletSessionKey(wallet.publicKey!, wallet.signMessage);
         if (!live) return;
-        const next = await openSession(kp, wallet.publicKey!);
-        const signature = await prepareWalletProfile(wallet.publicKey!, kp, next, wallet.sendTransaction);
+        const baseSession = await openSession(kp);
+        const delegated = await hasDelegatedProfile(wallet.publicKey!, kp, baseSession);
         if (!live) return;
-        if (signature) console.info("Wallet profile transaction confirmed", signature);
+        const next = delegated ? await openSession(kp, wallet.publicKey!) : baseSession;
+        if (!live) return;
         setActiveSession(next);
       } catch (e) {
         if (!live) return;
@@ -144,7 +123,7 @@ export default function App() {
       }
     })();
     return () => { live = false; };
-  }, [open, wallet.publicKey, wallet.signMessage, wallet.sendTransaction, setActiveSession]);
+  }, [open, wallet.publicKey, wallet.signMessage, setActiveSession]);
 
   const onWalletClick = () => {
     if (wallet.publicKey) {
@@ -183,6 +162,7 @@ export default function App() {
             session={session}
             onOpen={(i) => setOpen(i, false)}
             onPlay={(i) => setOpen(i, true)}
+            walletKey={wallet.publicKey}
             walletConnected={!!wallet.publicKey}
             walletBusy={walletBusy}
             walletNotice={walletNotice}
@@ -204,10 +184,11 @@ function status(t: Table, now: number): Status {
 }
 const joinable = (t: Table | null | undefined) => !!t && (t.phase === 0 || t.phase === 3) && t.seats.some((s) => s.player.equals(ZERO));
 
-function Lobby({ session, onOpen, onPlay, walletConnected, walletBusy, walletNotice, onWalletClick }: {
+function Lobby({ session, onOpen, onPlay, walletKey, walletConnected, walletBusy, walletNotice, onWalletClick }: {
   session: Session;
   onOpen: (i: number) => void;
   onPlay: (i: number) => void;
+  walletKey: PublicKey | null;
   walletConnected: boolean;
   walletBusy: boolean;
   walletNotice: string;
@@ -273,7 +254,7 @@ function Lobby({ session, onOpen, onPlay, walletConnected, walletBusy, walletNot
       <header className="lobby-top">
         <div className="brand"><Logo size={30} /><span className="wordmark">Tipoff</span></div>
         <span className="grow" />
-        <span className="pill" title={session.player ? "Your wallet owns this profile. A session key signs your moves, so there are no pop-ups or fees." : "A key made in this browser signs your moves. No wallet, no fees."}><i className="dot on" />{session.player ? "Wallet" : "Guest"} {short(session.id)}</span>
+        <span className="pill" title={walletConnected ? "Signed in with your wallet. A deterministic session key signs your moves with zero SOL, pop-ups, or fees." : "A key made in this browser signs your moves. No wallet, no fees."}><i className="dot on" />{walletConnected && walletKey ? `Wallet ${short(walletKey)}` : `Guest ${short(session.id)}`}</span>
         <button className="wallet-connect" type="button" title={WALLET_TITLE} disabled={walletBusy} onClick={onWalletClick}>
           <span className="wallet-label-wide">{walletBusy ? "Connecting…" : walletConnected ? "Disconnect" : "Connect wallet"}</span>
           <span className="wallet-label-short">{walletBusy ? "…" : walletConnected ? "Disconnect" : "Connect"}</span>
